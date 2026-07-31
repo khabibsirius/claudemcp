@@ -1,0 +1,4 @@
+websocket-client
+ollama
+python-dotenv
+mcp[cli]
