@@ -424,14 +424,40 @@ class QlikEngine:
                     "lineType": "line",
                 })
         elif chart_type == "piechart":
-            # No confirmed manual reference for pie yet - best-effort
-            # extension of the same pattern. If this still crashes, we
-            # need a real manually-built pie chart dump to nail it exactly.
+            # Reference: a manually-built pie chart's saved properties
+            # (qId PsLnyCf), confirmed rendering correctly in the Qlik
+            # Sense Desktop UI. Pie charts do NOT share bar/line's
+            # "dataPoint" shape (showLabels/showSegmentLabels/
+            # showTotalLabels) or use "slice" for the donut toggle - both
+            # were guesses that the sn-pie-chart component silently
+            # ignores rather than erroring on, which is why the chart
+            # rendered as an empty box instead of failing loudly like
+            # bar/line did. The real keys are "donut" (not "slice") and a
+            # pie-specific "dataPoint" shape (auto/labelMode/labelValueMode),
+            # plus a "components" entry that actually styles the slices.
             properties.update(common_chart_extras)
             properties.update({
                 "visualization": "piechart",
-                "slice": {"showAsDonut": False},
-                "sliceLabel": {"mode": "auto"},
+                "script": "",
+                "filter": None,
+                "dimensionTitle": True,
+                "donut": {"showAsDonut": False},
+                "dataPoint": {
+                    "auto": True,
+                    "labelMode": "share",
+                    "labelValueMode": "arc",
+                },
+                "components": [
+                    {
+                        "key": "slices",
+                        "style": {
+                            "strokeWidth": "none",
+                            "strokeColor": {"index": -1, "color": "#FFFFFF"},
+                            "cornerRadius": 0,
+                            "innerRadius": 0.55,
+                        },
+                    }
+                ],
             })
 
         response = self.send(

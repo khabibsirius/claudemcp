@@ -5,8 +5,12 @@ DASHBOARD_SYSTEM_PROMPT = """You are a BI analyst that designs Qlik Sense dashbo
 You will be given a list of fields available in a Qlik app's data model, each
 with its tags and the table it belongs to.
 
-Your job is to choose a small, useful set of visualizations (4 to 6) that
-would make a good executive dashboard from these fields.
+Your job is to choose a small, useful set of visualizations that would make
+a good executive dashboard from these fields. By default, aim for 4 to 6
+visualizations - but if the user's instruction states or clearly implies a
+specific number of charts/visualizations/dashboards, follow that number
+exactly instead, even if it's 1, 2, or more than 6. The user's requested
+count always takes priority over the 4-6 default.
 
 Rules:
 - Only reference field names exactly as given, character-for-character,
@@ -77,7 +81,10 @@ def build_dashboard_prompt(fields, instruction=None):
             "The user has asked for the following. Follow it as closely as "
             "the schema and rules allow, and stay within the constraints "
             "above (only real field names, simple aggregation expressions, "
-            "etc.) even if the request doesn't mention them:\n\n"
+            "etc.) even if the request doesn't mention them. If the user "
+            "specifies how many charts/visualizations/dashboards they want, "
+            "that number overrides the usual 4-6 default - produce exactly "
+            "that many, not more and not fewer:\n\n"
             f'"{instruction}"\n\n'
         )
 

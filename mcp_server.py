@@ -10,7 +10,7 @@ README.md for setup. Run with:
 and point your MCP client at this script (stdio transport).
 """
 
-from typing import Optional
+import json
 
 from mcp.server import MCPServer
 
@@ -25,7 +25,9 @@ mcp = MCPServer(
         "Tools for inspecting a Qlik Sense app's data model and creating "
         "sheets/charts in it via the Qlik Engine API. Call qlik_connect "
         "first. For a one-shot AI-designed dashboard, use "
-        "qlik_build_ai_dashboard instead of the individual tools."
+        "qlik_build_ai_dashboard instead of the individual tools - pass an "
+        "`instruction` to steer what it designs, e.g. 'focus on sales by "
+        "region and add a trend over time'."
     ),
 )
 
@@ -39,6 +41,31 @@ def _require_engine() -> QlikEngine:
     if _state["engine"] is None:
         raise QlikEngineError("Not connected. Call qlik_connect first.")
     return _state["engine"]
+
+
+# ----------------------------------------------------------------------
+# Resources - read-only context the client can browse (e.g. the
+# "Resources" tab), separate from the callable qlik_* tools below.
+# ----------------------------------------------------------------------
+
+@mcp.resource("qlik://fields")
+def qlik_fields_resource() -> str:
+    """The connected app's field list (name, tags, source tables) as JSON.
+    Empty/error until qlik_connect has been called."""
+    engine = _state["engine"]
+    if engine is None:
+        return json.dumps({"error": "Not connected. Call qlik_connect first."})
+    return json.dumps(engine.get_fields(), indent=2)
+
+
+@mcp.resource("qlik://sheets")
+def qlik_sheets_resource() -> str:
+    """The connected app's sheet list (title, chart count) as JSON, the way
+    the Hub's sheet navigator sees it."""
+    engine = _state["engine"]
+    if engine is None:
+        return json.dumps({"error": "Not connected. Call qlik_connect first."})
+    return json.dumps(_list_sheets(engine), indent=2)
 
 
 # ----------------------------------------------------------------------
@@ -84,23 +111,25 @@ def qlik_create_sheet(title: str, description: str = "Created by AI") -> str:
 def qlik_create_chart(
     chart_type: str,
     title: str,
-    dimension: Optional[str] = None,
-    measure: Optional[str] = None,
-    measure_expression: Optional[str] = None,
+    dimension: str = "",
+    measure: str = "",
+    measure_expression: str = "",
 ) -> str:
     """Add a chart to the currently active sheet (call qlik_create_sheet
     first). chart_type must be one of: 'kpi', 'barchart', 'linechart',
     'piechart', 'table'. dimension is the exact field name to group by
-    (omit for kpi). measure_expression must be a single simple aggregation
-    like 'Sum([Sales])', 'Count([Order Id])', 'Avg([Field Name])' -
-    anything more complex (SortBy, Limit, Aggr, nested expressions) will
-    fail to calculate and render blank. Use qlik_list_fields first;
-    invented field names create a chart object but it silently shows no
-    data."""
+    (leave blank for kpi). measure_expression must be a single simple
+    aggregation like 'Sum([Sales])', 'Count([Order Id])', 'Avg([Field
+    Name])' - anything more complex (SortBy, Limit, Aggr, nested
+    expressions) will fail to calculate and render blank. Use
+    qlik_list_fields first; invented field names create a chart object
+    but it silently shows no data."""
     engine = _require_engine()
     engine.create_chart(
         chart_type, title,
-        dimension=dimension, measure=measure, measure_expression=measure_expression,
+        dimension=dimension or None,
+        measure=measure or None,
+        measure_expression=measure_expression or None,
     )
     return f"Added {chart_type} '{title}' to the current sheet."
 
@@ -114,13 +143,7 @@ def qlik_save() -> str:
     return "Saved."
 
 
-@mcp.tool()
-def qlik_list_sheets() -> list[dict]:
-    """List every sheet in the connected app the way the Qlik Sense Hub's
-    sheet navigator sees it (title and chart count), to confirm a sheet is
-    actually discoverable rather than just present as a raw object."""
-    engine = _require_engine()
-
+def _list_sheets(engine: QlikEngine) -> list[dict]:
     response = engine.send(
         "CreateSessionObject",
         handle=engine.app_handle,
@@ -152,6 +175,15 @@ def qlik_list_sheets() -> list[dict]:
 
 
 @mcp.tool()
+def qlik_list_sheets() -> list[dict]:
+    """List every sheet in the connected app the way the Qlik Sense Hub's
+    sheet navigator sees it (title and chart count), to confirm a sheet is
+    actually discoverable rather than just present as a raw object."""
+    engine = _require_engine()
+    return _list_sheets(engine)
+
+
+@mcp.tool()
 def qlik_disconnect() -> str:
     """Close the connection to the Qlik Sense app."""
     if _state["engine"] is not None:
@@ -166,14 +198,23 @@ def qlik_disconnect() -> str:
 # ----------------------------------------------------------------------
 
 @mcp.tool()
-def qlik_build_ai_dashboard(app_name: str = APP_NAME, ollama_model: str = OLLAMA_MODEL) -> dict:
+def qlik_build_ai_dashboard(
+    app_name: str = APP_NAME,
+    ollama_model: str = OLLAMA_MODEL,
+    instruction: str = "",
+) -> dict:
     """One-shot: connect to an app, read its data model, ask a local Ollama
     LLM to design a dashboard (title + a handful of KPIs/charts), build it
     as a new sheet, skip anything that references a non-existent field or
     an unsafe expression, and save. Returns what was built and what was
     skipped, with reasons. Use this instead of the individual qlik_* tools
     when you just want "build me a dashboard" in one step; use the
-    individual tools when you want to design the dashboard yourself."""
+    individual tools when you want to design the dashboard yourself.
+
+    instruction: optional free-text request that steers what the model
+    designs, e.g. "focus on sales by region and show a trend over time".
+    Pass through whatever the user asked for in chat - leave it blank to
+    let the model use its own judgement instead."""
     engine = QlikEngine()
     try:
         engine.open_app(app_name)
@@ -181,7 +222,7 @@ def qlik_build_ai_dashboard(app_name: str = APP_NAME, ollama_model: str = OLLAMA
         if not fields:
             return {"error": f"No fields found in app '{app_name}'. Is data loaded into it?"}
 
-        spec = design_dashboard(fields, model=ollama_model)
+        spec = design_dashboard(fields, model=ollama_model, instruction=instruction or None)
         field_names = {f["name"] for f in fields}
         built, skipped = build_dashboard(engine, spec, field_names=field_names)
         engine.save()
