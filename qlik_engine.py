@@ -196,7 +196,7 @@ class QlikEngine:
                     "qStaticContentUrlDef": {}
                 },
                 "columns": self.GRID_COLUMNS,
-                "rows": 100,
+                "rows": self.GRID_ROWS,
                 "cells": [],
                 "qChildListDef": {
                     "qData": {
@@ -219,6 +219,11 @@ class QlikEngine:
 
         return response
 
+    # Qlik's current responsive grid treats the sheet as GRID_COLUMNS wide
+    # by GRID_COLUMNS "tall" (a square unit grid) when translating col/row
+    # into the fractional 0-1 bounds the client actually renders from.
+    GRID_ROWS = GRID_COLUMNS
+
     def _place_on_grid(self, colspan=12, rowspan=4):
         """Very simple left-to-right, top-to-bottom grid packer for chart placement."""
 
@@ -233,7 +238,16 @@ class QlikEngine:
 
     def _add_object_to_sheet_layout(self, object_id, object_type, colspan=12, rowspan=4):
         """Registers a child object's position in the sheet's 'cells' grid so it
-        actually shows up laid out on the sheet in the Qlik Sense client."""
+        actually shows up laid out on the sheet in the Qlik Sense client.
+
+        Modern Qlik Sense sheets are positioned by fractional "bounds"
+        (x/y/width/height as 0-1 values relative to the sheet), not by the
+        integer col/row/colspan/rowspan grid values alone - those are kept
+        only for backward compatibility. If "bounds" is omitted, the client
+        doesn't error, it silently falls back to a small default size at
+        the sheet's origin - which is exactly the "everything minimized
+        and stacked at the top" symptom. So we compute and send both.
+        """
 
         if self.sheet_handle is None:
             raise QlikEngineError("No sheet has been created.")
@@ -243,13 +257,21 @@ class QlikEngine:
         properties = self.send("GetProperties", handle=self.sheet_handle)
         sheet_props = properties["result"]["qProp"]
 
+        bounds = {
+            "x": col / self.GRID_COLUMNS,
+            "y": row / self.GRID_ROWS,
+            "width": colspan / self.GRID_COLUMNS,
+            "height": rowspan / self.GRID_ROWS,
+        }
+
         sheet_props.setdefault("cells", []).append({
             "name": object_id,
             "type": object_type,
             "col": col,
             "row": row,
             "colspan": colspan,
-            "rowspan": rowspan
+            "rowspan": rowspan,
+            "bounds": bounds,
         })
 
         self.send(

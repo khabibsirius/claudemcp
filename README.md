@@ -72,7 +72,7 @@ python dump_object_properties.py "Sales"  # ...filtered by qId/title substring
 
 Run:
 ```bash
-python mcp_server.py
+mcp dev mcp_server.py
 ```
 
 Point your MCP client at it. For Claude Code, add to your MCP config:
