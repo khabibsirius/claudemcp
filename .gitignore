@@ -1,0 +1,28 @@
+# Secrets / local config
+.env
+*.pem
+certs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings
+.claude/settings.local.json
+node_modules/
+tools/chart_defaults.json
+tools/extract.log
+tools/package-lock.json

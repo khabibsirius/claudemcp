@@ -1,0 +1,970 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qlik AI — Data Load Editor</title>
+<script>
+  // Resolve the theme before the first paint, or the page flashes the wrong
+  // one on every load. The rest of the theme handling is in the main script;
+  // this only has to run early.
+  try {
+    var saved = localStorage.getItem("qlikai-theme") || "system";
+    document.documentElement.dataset.theme =
+      saved === "dark" || (saved !== "light" &&
+        matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
+  } catch (e) {}
+</script>
+<style>
+  /* Self-contained on purpose: no external fonts or scripts - this has to
+     work with no internet. System fonts only. */
+  /* Light is the base; the dark palette below is applied by data-theme,
+     which the head script sets from the saved choice or the OS. Driving it
+     from an attribute rather than a media query is what lets someone pick a
+     theme that isn't the one their machine is set to. */
+  :root {
+    color-scheme: light;
+    --green: #00934c; --green-dark: #007a3f; --green-soft: #e6f5ec;
+    --bg: #f4f6f8; --surface: #ffffff; --raised: #fbfcfd;
+    --line: #e2e6ea; --line-soft: #edf0f3;
+    --ink: #1f2733; --muted: #69737f; --faint: #97a0aa;
+    --accent: #2f7fb2; --accent-soft: #e9f3f9;
+    --bad: #c0392b; --bad-soft: #fcedeb;
+    --chip: #f0f2f5; --you-bubble: #e6f5ec; --bot-bubble: #f2f4f7;
+    --shadow: 0 1px 2px rgba(16, 24, 40, .05), 0 1px 3px rgba(16, 24, 40, .06);
+    --code-bg: #fbfcfd; --gutter-bg: #f5f7f9;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --green: #1db26b; --green-dark: #17995b; --green-soft: #10281c;
+    --bg: #14161a; --surface: #1c1f24; --raised: #22262c;
+    --line: #30353d; --line-soft: #272b32;
+    --ink: #e6e9ed; --muted: #9aa3ad; --faint: #6b747f;
+    --accent: #5aa3cf; --accent-soft: #16232c;
+    --bad: #e26d5c; --bad-soft: #33201c;
+    --chip: #262b32; --you-bubble: #123324; --bot-bubble: #242930;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+    --code-bg: #191c21; --gutter-bg: #1c2026;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 14px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    color: var(--ink); background: var(--bg);
+    display: flex; flex-direction: column;
+  }
+  ::selection { background: var(--accent); color: #fff; }
+
+  /* Subtle scrollbars that match both themes. */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--line); border-radius: 8px;
+    border: 2px solid transparent; background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background-color: var(--faint); }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  /* ------------------------------------------------------------------ */
+  /* Top bar                                                             */
+  /* ------------------------------------------------------------------ */
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 16px; background: var(--surface);
+    border-bottom: 1px solid var(--line);
+    box-shadow: var(--shadow); z-index: 5;
+  }
+  .brand { display: flex; align-items: center; gap: 9px; margin-right: 4px; }
+  .brand .mark {
+    width: 26px; height: 26px; border-radius: 8px; flex: none;
+    background: linear-gradient(135deg, var(--green) 0%, #06b6d4 120%);
+    display: grid; place-items: center;
+    color: #fff; font-size: 13px; font-weight: 700;
+  }
+  .brand .name { font-weight: 650; font-size: 14.5px; letter-spacing: .1px; }
+  .brand .name span { color: var(--green); }
+  .badge {
+    font-size: 11px; font-weight: 600; color: var(--muted);
+    background: var(--chip); border: 1px solid var(--line);
+    padding: 2px 8px; border-radius: 999px; text-transform: lowercase;
+  }
+  header .spacer { flex: 1; }
+
+  .pick { display: flex; flex-direction: column; gap: 1px; font-size: 10.5px;
+          font-weight: 600; letter-spacing: .4px; text-transform: uppercase;
+          color: var(--faint); }
+  .pick select {
+    font: 13px "Segoe UI", system-ui, sans-serif; color: var(--ink);
+    background: var(--raised); padding: 6px 26px 6px 9px;
+    border: 1px solid var(--line); border-radius: 7px; max-width: 280px;
+    appearance: none; cursor: pointer; outline: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                      linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 15px) 55%, calc(100% - 10px) 55%;
+    background-size: 5px 5px;
+    background-repeat: no-repeat;
+    transition: border-color .15s;
+  }
+  .pick select:hover { border-color: var(--faint); }
+  .pick select:focus { border-color: var(--accent); }
+  .pick select option:disabled { color: var(--bad); }
+
+  /* The reload permission, as a switch rather than a bare checkbox. */
+  .switch { display: flex; align-items: center; gap: 8px; cursor: pointer;
+            font-size: 12.5px; color: var(--muted); user-select: none; }
+  .switch input { position: absolute; opacity: 0; pointer-events: none; }
+  .switch .track {
+    width: 32px; height: 18px; border-radius: 999px; flex: none;
+    background: var(--line); position: relative; transition: background .18s;
+  }
+  .switch .track::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--surface); box-shadow: 0 1px 2px rgba(0,0,0,.25);
+    transition: transform .18s;
+  }
+  .switch input:checked + .track { background: var(--green); }
+  .switch input:checked + .track::after { transform: translateX(14px); }
+  .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* Theme picker. Three states rather than two, because "follow the machine"
+     is a real preference and losing it to a plain toggle is a downgrade. */
+  .theme {
+    display: flex; gap: 2px; padding: 2px; flex: none;
+    background: var(--chip); border: 1px solid var(--line); border-radius: 999px;
+  }
+  .theme button {
+    font: 12px "Segoe UI", system-ui, sans-serif; line-height: 1;
+    padding: 5px 9px; border: 0; border-radius: 999px;
+    background: transparent; color: var(--muted); box-shadow: none;
+  }
+  .theme button:hover:not(.on) { background: var(--line-soft); color: var(--ink); }
+  .theme button.on {
+    background: var(--surface); color: var(--ink); box-shadow: var(--shadow);
+  }
+
+  button {
+    font: inherit; font-weight: 550; padding: 7px 16px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--raised); color: var(--ink);
+    cursor: pointer; transition: background .15s, border-color .15s, transform .06s;
+  }
+  button:hover:not(:disabled) { background: var(--chip); border-color: var(--faint); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button.primary {
+    background: var(--green); border-color: var(--green); color: #fff;
+    box-shadow: var(--shadow);
+  }
+  button.primary:hover:not(:disabled) { background: var(--green-dark); border-color: var(--green-dark); }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+
+  /* Busy state for Load data: a small conic spinner replaces intent. */
+  button .spin {
+    display: none; width: 12px; height: 12px; margin-right: 7px;
+    border: 2px solid rgba(255,255,255,.35); border-top-color: #fff;
+    border-radius: 50%; vertical-align: -2px;
+    animation: rotate .7s linear infinite;
+  }
+  button.busy .spin { display: inline-block; }
+  @keyframes rotate { to { transform: rotate(360deg); } }
+
+  /* ------------------------------------------------------------------ */
+  /* Main three-pane layout                                              */
+  /* ------------------------------------------------------------------ */
+  main { flex: 1; display: flex; min-height: 0; gap: 0; }
+  .col { display: flex; flex-direction: column; min-height: 0; }
+  .sections { width: var(--sections-w, 200px); background: var(--surface);
+              border-right: 1px solid var(--line); overflow: hidden; flex: none; }
+  .connections { width: var(--connections-w, 250px); background: var(--surface);
+                 border-left: 1px solid var(--line); overflow: hidden; flex: none; }
+  .editor { flex: 1; min-width: 0; background: var(--code-bg); }
+
+  /* Draggable dividers. Every boundary in the layout can be taken hold of:
+     the side panels collapse when dragged closed, and double-click puts a
+     divider back where it started. */
+  .divider-v { flex: none; width: 6px; margin: 0 -3px; cursor: col-resize;
+               z-index: 4; transition: background .15s; }
+  .divider-v:hover, .divider-v.dragging {
+    background: color-mix(in srgb, var(--green) 45%, transparent);
+  }
+  .divider-h {
+    position: absolute; top: 0; left: 0; right: 0; height: 8px;
+    cursor: row-resize; z-index: 6;
+  }
+  .divider-h::after {
+    content: ""; display: block; margin: 2px auto 0;
+    width: 44px; height: 4px; border-radius: 99px; background: var(--line);
+    transition: background .15s;
+  }
+  .divider-h:hover::after, .divider-h.dragging::after { background: var(--green); }
+
+  .panel-title {
+    padding: 11px 14px 9px; font-size: 11px; font-weight: 650;
+    letter-spacing: .6px; text-transform: uppercase; color: var(--faint);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .list { overflow: auto; flex: 1; padding: 6px; }
+  .list .item {
+    padding: 8px 10px; cursor: pointer; border-radius: 7px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    border-left: 3px solid transparent; transition: background .12s;
+    margin-bottom: 1px;
+  }
+  .list .item:hover { background: var(--chip); }
+  .list .item.on {
+    background: var(--green-soft); border-left-color: var(--green);
+    font-weight: 550;
+  }
+  .list .sub { display: block; color: var(--faint); font-size: 11px; }
+  .list .empty { color: var(--faint); font-size: 12.5px; padding: 10px; cursor: default; }
+
+  /* ------------------------------------------------------------------ */
+  /* Code editor                                                         */
+  /* ------------------------------------------------------------------ */
+  /* Gutter and textarea share one font and line-height, or the numbers
+     drift out of step with the code they label. */
+  .code { flex: 1; display: flex; min-height: 0; background: var(--code-bg); }
+  .gutter, textarea#script {
+    font: 13.5px/1.65 "Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace;
+    padding-top: 14px; padding-bottom: 14px;
+  }
+  .gutter {
+    padding-left: 14px; padding-right: 12px; min-width: 46px;
+    text-align: right; white-space: pre; overflow: hidden;
+    color: var(--faint); user-select: none;
+    background: var(--gutter-bg); border-right: 1px solid var(--line-soft);
+  }
+  textarea#script {
+    flex: 1; width: 100%; border: 0; outline: none; resize: none;
+    padding-left: 16px; padding-right: 16px;
+    tab-size: 4; background: var(--code-bg); color: var(--ink);
+    caret-color: var(--green);
+  }
+  textarea#script::placeholder { color: var(--faint); }
+
+  .editor-status {
+    padding: 8px 16px; font-size: 12.5px; color: var(--muted);
+    border-top: 1px solid var(--line); background: var(--surface);
+    white-space: pre-wrap; max-height: 130px; overflow: auto;
+  }
+  .editor-status.bad { color: var(--bad); background: var(--bad-soft); }
+  .editor-status.good { color: var(--green-dark); background: var(--green-soft); }
+
+  /* ------------------------------------------------------------------ */
+  /* Assistant dock                                                      */
+  /* ------------------------------------------------------------------ */
+  /* Smaller than the editor by default and draggable, since the script is
+     the thing you read and the conversation is the thing you glance at. */
+  .chat {
+    position: relative;
+    height: var(--chat-h, 50vh); min-height: 110px; max-height: 94vh;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    border-top: 1px solid var(--line); background: var(--surface);
+    box-shadow: 0 -1px 3px rgba(16, 24, 40, .05);
+  }
+
+  /* Before the first message the input is the main event, not a strip at
+     the bottom of the screen: welcome, suggestions and the box sit together
+     in the middle. The first question docks everything back down so the
+     history has the room. */
+  .chat.empty { justify-content: center; }
+  .chat.empty .log { flex: 0 0 auto; overflow: visible; padding-bottom: 0; }
+  .chat.empty .log .msg { max-width: 760px; }
+  .chat.empty form { border-top: 0; }
+  .chat.empty form, .chat.empty .chips, .chat.empty .hint { max-width: 792px; }
+  .chat.empty input { padding: 13px 17px; font-size: 15px; }
+  .chat .log { flex: 1; overflow: auto; padding: 16px 18px 8px; }
+
+  .msg { margin: 0 auto 14px; max-width: 980px; animation: rise .18s ease-out; }
+  @keyframes rise { from { opacity: 0; transform: translateY(4px); } }
+  .msg .who {
+    font-size: 10.5px; font-weight: 650; letter-spacing: .5px;
+    color: var(--faint); text-transform: uppercase; margin-bottom: 3px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .msg .who::before {
+    content: ""; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green);
+  }
+  .msg.you .who::before { background: var(--accent); }
+  .msg.you .who { color: var(--accent); }
+
+  /* Copy, on every message. Hidden until the message is hovered so the log
+     stays quiet, but always reachable by keyboard. */
+  .msg .copy {
+    margin-left: auto; font: 11px "Segoe UI", system-ui, sans-serif;
+    text-transform: none; letter-spacing: 0; font-weight: 600;
+    padding: 3px 9px; border-radius: 999px; color: var(--muted);
+    background: var(--surface); border: 1px solid var(--line);
+    opacity: 0; transition: opacity .15s, color .15s, border-color .15s;
+  }
+  .msg:hover .copy, .msg .copy:focus-visible { opacity: 1; }
+  .msg .copy:hover { color: var(--ink); border-color: var(--faint); }
+  .msg .copy.done { opacity: 1; color: var(--green); border-color: var(--green); }
+  .msg .body {
+    white-space: pre-wrap; padding: 9px 13px; border-radius: 10px;
+    background: var(--bot-bubble); width: fit-content; max-width: 100%;
+    line-height: 1.55;
+  }
+  .msg.you .body { background: var(--you-bubble); }
+  .msg.note .body {
+    background: var(--accent-soft); font-size: 13px; color: var(--muted);
+    border: 1px dashed var(--line);
+  }
+
+  /* Tool calls as chips: pending pulses, done gets a tick, failed a cross. */
+  .acts { display: flex; flex-wrap: wrap; gap: 5px; margin: 4px 0 6px; }
+  .chip {
+    font: 11.5px "Cascadia Code", Consolas, monospace;
+    padding: 2.5px 9px; border-radius: 999px;
+    background: var(--chip); color: var(--muted);
+    border: 1px solid var(--line); display: inline-flex; gap: 5px;
+    align-items: center;
+  }
+  .chip::before { content: "●"; font-size: 8px; color: var(--faint); }
+  .chip.run::before { color: var(--accent); animation: blink 1s ease-in-out infinite; }
+  .chip.ok::before { content: "✓"; font-size: 10px; color: var(--green); }
+  .chip.fail::before { content: "✕"; font-size: 10px; color: var(--bad); }
+  .chip.fail { border-color: var(--bad); color: var(--bad); }
+  @keyframes blink { 50% { opacity: .25; } }
+
+  /* Typing indicator while the model has said nothing yet. */
+  .dots { display: inline-flex; gap: 4px; padding: 4px 2px; }
+  .dots i {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--faint);
+    animation: bounce 1.2s ease-in-out infinite;
+  }
+  .dots i:nth-child(2) { animation-delay: .15s; }
+  .dots i:nth-child(3) { animation-delay: .3s; }
+  @keyframes bounce { 30% { transform: translateY(-4px); opacity: 1; } }
+
+  /* Suggestion chips - one click instead of knowing what to type. */
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; padding: 4px 18px 10px;
+           max-width: 1016px; margin: 0 auto; width: 100%; }
+  .chips button {
+    font-size: 12.5px; padding: 5px 12px; border-radius: 999px;
+    color: var(--muted); background: var(--surface);
+  }
+  .chips button:hover:not(:disabled) { color: var(--ink); border-color: var(--green); }
+
+  .chat form { display: flex; gap: 9px; padding: 10px 18px 6px;
+               border-top: 1px solid var(--line-soft);
+               max-width: 1016px; margin: 0 auto; width: 100%; }
+  .chat input {
+    flex: 1; font: inherit; padding: 10px 14px;
+    border: 1.5px solid color-mix(in srgb, var(--muted) 40%, var(--line));
+    border-radius: 10px; outline: none;
+    background: var(--bg); color: var(--ink);
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .chat input::placeholder { color: var(--faint); }
+  .chat input:focus {
+    border-color: var(--green);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 18%, transparent);
+  }
+  .hint { color: var(--faint); font-size: 12px; padding: 0 18px 10px;
+          max-width: 1016px; margin: 0 auto; width: 100%; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="mark">Q</div>
+    <div class="name">Qlik <span>AI</span></div>
+  </div>
+  <span class="badge" id="meta"></span>
+  <label class="pick">App <select id="appSel"></select></label>
+  <label class="pick">Model <select id="modelSel"></select></label>
+  <span class="spacer"></span>
+  <div class="theme" id="theme" role="group" aria-label="Colour theme">
+    <button type="button" data-pick="light" title="Light theme">☀ Light</button>
+    <button type="button" data-pick="dark" title="Dark theme">☾ Dark</button>
+    <button type="button" data-pick="system" title="Follow this machine's setting">Auto</button>
+  </div>
+  <label class="switch" title="With this off, the assistant can prepare a script but you must press Load data yourself.">
+    <input type="checkbox" id="allowReload" checked>
+    <span class="track"></span>
+    assistant may load data
+  </label>
+  <button id="btnSave">Save</button>
+  <button id="btnReload" class="primary"><span class="spin"></span>Load data</button>
+</header>
+
+<main>
+  <div class="col sections">
+    <div class="panel-title">Sections</div>
+    <div class="list" id="tabs"></div>
+  </div>
+  <div class="divider-v" id="dragSections" title="Drag to resize · double-click to reset"></div>
+
+  <div class="col editor">
+    <div class="code">
+      <div class="gutter" id="gutter"></div>
+      <textarea id="script" spellcheck="false" placeholder="Loading…"></textarea>
+    </div>
+    <div class="editor-status" id="status"></div>
+  </div>
+
+  <div class="divider-v" id="dragConnections" title="Drag to resize · double-click to reset"></div>
+  <div class="col connections">
+    <div class="panel-title">Data connections</div>
+    <div class="list" id="connections"></div>
+  </div>
+</main>
+
+<div class="chat" id="chat">
+  <div class="divider-h" id="dragChat" title="Drag to resize · double-click to reset"></div>
+  <div class="log" id="log"></div>
+  <div class="chips" id="chips"></div>
+  <form id="chatForm">
+    <input id="chatInput" autocomplete="off"
+           placeholder="Ask for anything: load the csvs in my downloads folder and merge them / build me a sales dashboard / what is total sales by market?">
+    <button class="primary" id="btnSend">Send</button>
+  </form>
+  <div class="hint" id="chatHint">One box for everything — loading, cleaning, dashboards,
+    questions. The assistant writes the script; you press <b>Load data</b> to run it.</div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let currentTab = null;
+
+const SUGGESTIONS = [
+  "What data is loaded right now?",
+  "Build me a dashboard from this data",
+  "Clean the data — drop useless columns",
+  "Add Year and Month columns from the date field",
+];
+
+function setStatus(text, kind) {
+  const el = $("status");
+  el.textContent = text || "";
+  el.className = "editor-status" + (kind ? " " + kind : "");
+}
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  if (!response.ok) {
+    let detail = response.statusText;
+    try { detail = (await response.json()).detail || detail; } catch (_) {}
+    throw new Error(detail);
+  }
+  return response.json();
+}
+
+function renderGutter() {
+  const lines = $("script").value.split("\n").length;
+  $("gutter").textContent =
+    Array.from({length: lines}, (_, i) => i + 1).join("\n");
+}
+
+// Set the script and keep the line numbers in step. Every path that changes
+// the buffer goes through here, so the gutter can't fall out of sync.
+function setScript(text) {
+  $("script").value = text;
+  renderGutter();
+}
+
+$("script").addEventListener("input", renderGutter);
+$("script").addEventListener("scroll", () => {
+  $("gutter").scrollTop = $("script").scrollTop;
+});
+
+// Ctrl+S saves the script instead of the browser offering to save the page,
+// and Tab indents instead of leaving the editor - both what an editor does.
+$("script").addEventListener("keydown", event => {
+  if ((event.ctrlKey || event.metaKey) && event.key === "s") {
+    event.preventDefault();
+    $("btnSave").click();
+  } else if (event.key === "Tab") {
+    event.preventDefault();
+    const el = event.target;
+    const start = el.selectionStart;
+    el.setRangeText("\t", start, el.selectionEnd, "end");
+    renderGutter();
+  }
+});
+
+function renderTabs(tabs) {
+  const box = $("tabs");
+  box.innerHTML = "";
+  tabs.forEach(name => {
+    const item = document.createElement("div");
+    item.className = "item" + (name === currentTab ? " on" : "");
+    item.textContent = name;
+    // Selecting a section scrolls the editor to it. The whole script stays
+    // in one editable buffer so the assistant and the person are never
+    // editing different copies of it.
+    item.onclick = () => { currentTab = name; scrollToTab(name); renderTabs(tabs); };
+    box.appendChild(item);
+  });
+}
+
+function scrollToTab(name) {
+  const editor = $("script");
+  const index = editor.value.indexOf("///$tab " + name);
+  if (index < 0) return;
+  const line = editor.value.slice(0, index).split("\n").length;
+  editor.focus();
+  editor.setSelectionRange(index, index);
+  editor.scrollTop = Math.max(0, (line - 2) * 22);
+}
+
+function renderConnections(connections) {
+  const box = $("connections");
+  box.innerHTML = "";
+  if (!connections.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "None yet — ask the assistant to add a folder as a data source.";
+    box.appendChild(empty);
+    return;
+  }
+  connections.forEach(connection => {
+    const item = document.createElement("div");
+    item.className = "item";
+    item.title = connection.path || "";
+    const sub = document.createElement("span");
+    sub.className = "sub";
+    sub.textContent = connection.type || "";
+    item.textContent = connection.name;
+    item.appendChild(sub);
+    item.onclick = () => ask(`what files are in the ${connection.name} connection?`);
+    box.appendChild(item);
+  });
+}
+
+function renderChips() {
+  const box = $("chips");
+  box.innerHTML = "";
+  SUGGESTIONS.forEach(text => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.textContent = text;
+    chip.onclick = () => ask(text);
+    box.appendChild(chip);
+  });
+}
+
+// Qlik Sense Desktop keeps its own in-memory copy of an open app, so a sheet
+// created here is on disk but invisible in a Qlik window that was already
+// open. Showing the file's timestamp makes it obvious the work was saved and
+// that Qlik is the one holding a stale copy.
+function noteQlikCache(file) {
+  const stamp = file && file.modified ? ` (saved ${file.modified})` : "";
+  const note = document.createElement("div");
+  note.className = "msg note";
+  note.innerHTML = '<div class="who">note</div>';
+  const body = document.createElement("div");
+  body.className = "body";
+  body.textContent =
+    `Saved to the app file${stamp}. Qlik Sense Desktop won't show new sheets ` +
+    `in a window that already had this app open — close the app in Qlik and ` +
+    `open it again. Don't press Save in Qlik first: its older copy would ` +
+    `overwrite this.`;
+  note.firstChild.appendChild(copyButton(() => body.textContent));
+  note.appendChild(body);
+  $("log").appendChild(note);
+  $("log").scrollTop = $("log").scrollHeight;
+}
+
+// Copy that also works over plain http:// on a LAN address, where the
+// clipboard API is unavailable because the page isn't a secure context.
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (_) {
+    const scratch = document.createElement("textarea");
+    scratch.value = text;
+    scratch.style.cssText = "position:fixed;top:-1000px;opacity:0";
+    document.body.appendChild(scratch);
+    scratch.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (_) {}
+    scratch.remove();
+    return ok;
+  }
+}
+
+// getText is a function, not a string: the assistant's reply is still being
+// streamed when its button is created.
+function copyButton(getText) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "copy";
+  button.textContent = "Copy";
+  button.title = "Copy this message";
+  button.onclick = async () => {
+    const ok = await copyText(getText());
+    button.textContent = ok ? "Copied ✓" : "Press Ctrl+C";
+    button.classList.toggle("done", ok);
+    setTimeout(() => {
+      button.textContent = "Copy";
+      button.classList.remove("done");
+    }, 1400);
+  };
+  return button;
+}
+
+function addMessage(who, body) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg" + (who === "You" ? " you" : "");
+  wrap.innerHTML = `<div class="who"></div>`;
+  wrap.firstChild.textContent = who;
+  const text = document.createElement("div");
+  text.className = "body";
+  text.textContent = body;
+  wrap.firstChild.appendChild(copyButton(() => text.textContent));
+  wrap.appendChild(text);
+  $("log").appendChild(wrap);
+  $("log").scrollTop = $("log").scrollHeight;
+  return text;
+}
+
+function welcome() {
+  if (!$("log").children.length) {
+    addMessage("Assistant",
+      "Hi — I can load and clean data, write the load script, and build " +
+      "dashboards in this app. Describe what you want, or try one of the " +
+      "suggestions below.");
+  }
+  // Centered input until a conversation exists, docked once it does. Keyed
+  // on real user messages, not just log entries, so the welcome text alone
+  // still counts as "empty".
+  $("chat").classList.toggle("empty", !$("log").querySelector(".msg.you"));
+}
+
+function renderOptions(options) {
+  const appSel = $("appSel");
+  appSel.innerHTML = "";
+  options.apps.forEach(name => {
+    const option = new Option(name, name, false, name === options.app);
+    appSel.appendChild(option);
+  });
+
+  const modelSel = $("modelSel");
+  modelSel.innerHTML = "";
+  options.models.forEach(model => {
+    // Unusable models stay visible but disabled, so it's clear why a model
+    // you have installed isn't an option rather than it silently missing.
+    // Cloud models are selectable but labelled - they are much faster, and
+    // they are also the one choice that sends your data off the machine.
+    const size = model.size_gb ? ` (${model.size_gb}G)` : "";
+    const why = model.reason ? ` - ${model.reason}` : "";
+    const option = new Option(
+      (model.cloud ? "☁ " : "") + model.name + size + why,
+      model.name, false, model.name === options.model
+    );
+    option.disabled = !model.usable;
+    modelSel.appendChild(option);
+  });
+}
+
+async function select(change) {
+  setStatus("Switching…");
+  try {
+    await api("/api/select", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(change),
+    });
+    currentTab = null;
+    await load();
+    setStatus("");
+  } catch (e) {
+    setStatus("Could not switch: " + e.message, "bad");
+    await load();
+  }
+}
+
+$("appSel").onchange = event => {
+  $("log").innerHTML = "";   // the conversation was about the previous app
+  select({app: event.target.value});
+};
+$("modelSel").onchange = event => {
+  const chosen = event.target.selectedOptions[0].textContent;
+  if (chosen.startsWith("☁") && !confirm(
+      "This is a cloud model. Field names, sample values and query results " +
+      "will be sent to Ollama's servers instead of staying on this machine.\n\n" +
+      "Continue?")) {
+    load();
+    return;
+  }
+  select({model: event.target.value});
+};
+$("allowReload").onchange = event => select({allow_reload: event.target.checked});
+
+async function load() {
+  const state = await api("/api/state");
+  $("meta").textContent = state.mode;
+  $("allowReload").checked = state.allow_reload !== false;
+  // Qlik works without Ollama; only the assistant needs it. Say which half
+  // is down instead of looking broken.
+  const ready = state.assistant_ready !== false;
+  $("chatInput").placeholder = ready
+    ? "Ask for anything: load the csvs in my downloads folder and merge them / build me a sales dashboard / what is total sales by market?"
+    : "Assistant unavailable - start Ollama, then just type here again.";
+  $("chatHint").textContent = ready
+    ? "One box for everything - loading, cleaning, dashboards, questions. The assistant writes the script; you press Load data to run it."
+    : "Ollama isn't running, so the assistant is off. Everything else - the editor, Load data, Save - still works.";
+  setScript(state.script);
+  currentTab = currentTab || state.tabs[0] || null;
+  renderTabs(state.tabs);
+  renderConnections(state.connections);
+  renderChips();
+  welcome();
+  try {
+    renderOptions(await api("/api/options"));
+  } catch (e) {
+    $("meta").textContent = `${state.mode} · ${state.model}`;
+  }
+}
+
+$("btnSave").onclick = async () => {
+  setStatus("Saving…");
+  try {
+    const result = await api("/api/script", {
+      method: "PUT",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({content: $("script").value}),
+    });
+    renderTabs(result.tabs);
+    const saved = await api("/api/save", {method: "POST"});
+    const stamp = saved.file && saved.file.modified ? ` at ${saved.file.modified}` : "";
+    setStatus(`✓ Saved to the app file${stamp}. Press Load data to run it.`, "good");
+  } catch (e) {
+    setStatus("Not saved: " + e.message, "bad");
+  }
+};
+
+$("btnReload").onclick = async () => {
+  if (!confirm("Load data replaces every row currently in this app. Continue?")) return;
+  setStatus("Loading data… this can take a while for a large source.");
+  const btn = $("btnReload");
+  btn.disabled = true;
+  btn.classList.add("busy");
+  try {
+    // Save the buffer first, or the reload runs the previous script.
+    await api("/api/script", {
+      method: "PUT",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({content: $("script").value}),
+    });
+    const result = await api("/api/reload", {method: "POST"});
+    if (result.success) {
+      const tables = (result.tables || [])
+        .map(t => `${t.name}: ${t.rows.toLocaleString()} rows`).join("\n");
+      setStatus(`✓ Loaded ${(result.total_rows || 0).toLocaleString()} rows.\n${tables}`, "good");
+      await api("/api/save", {method: "POST"});
+    } else {
+      setStatus("Load failed:\n" + (result.errors || []).join("\n"), "bad");
+    }
+  } catch (e) {
+    setStatus("Load failed: " + e.message, "bad");
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove("busy");
+  }
+};
+
+function typingDots() {
+  const dots = document.createElement("span");
+  dots.className = "dots";
+  dots.innerHTML = "<i></i><i></i><i></i>";
+  return dots;
+}
+
+// Streamed: each tool call shows the moment it is decided and the answer
+// arrives word by word. A local model can take minutes on a multi-step
+// request, and waiting in silence for it is indistinguishable from a hang.
+async function ask(question) {
+  $("chat").classList.remove("empty");
+  addMessage("You", question);
+
+  const wrap = document.createElement("div");
+  wrap.className = "msg";
+  wrap.innerHTML = '<div class="who">Assistant</div>';
+  const acts = document.createElement("div");
+  acts.className = "acts";
+  const body = document.createElement("div");
+  body.className = "body";
+  body.appendChild(typingDots());
+  wrap.firstChild.appendChild(copyButton(() => body.textContent));
+  wrap.append(acts, body);
+  $("log").appendChild(wrap);
+
+  const scroll = () => { $("log").scrollTop = $("log").scrollHeight; };
+  scroll();
+
+  $("btnSend").disabled = true;
+  let answer = "";
+  let chip = null;
+  const done = [];
+
+  try {
+    const response = await fetch("/api/chat/stream", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({message: question}),
+    });
+    if (!response.ok) throw new Error(response.statusText);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    for (;;) {
+      const {value, done: finished} = await reader.read();
+      if (finished) break;
+      buffer += decoder.decode(value, {stream: true});
+
+      // SSE frames are separated by a blank line.
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop();
+
+      for (const frame of frames) {
+        const line = frame.split("\n").find(l => l.startsWith("data: "));
+        if (!line) continue;
+        const event = JSON.parse(line.slice(6));
+
+        if (event.type === "tool") {
+          done.push(event.name);
+          chip = document.createElement("span");
+          chip.className = "chip run";
+          chip.textContent = event.name;
+          acts.appendChild(chip);
+          scroll();
+        } else if (event.type === "tool_result") {
+          if (chip) {
+            chip.className = "chip " + (event.ok ? "ok" : "fail");
+            if (!event.ok && event.detail) chip.title = event.detail;
+          }
+          scroll();
+        } else if (event.type === "token") {
+          if (!answer) body.textContent = "";
+          answer += event.text;
+          body.textContent = answer;
+          scroll();
+        } else if (event.type === "done") {
+          body.textContent = event.reply || answer || "(no answer)";
+          scroll();
+        } else if (event.type === "error") {
+          body.textContent = "Error: " + event.message;
+          scroll();
+        } else if (event.type === "final") {
+          if (event.script_changed) {
+            setScript(event.script);
+            renderTabs(event.tabs);
+            setStatus("The assistant changed the script. Review it, then press Load data.", "good");
+          }
+          if (event.sheets_changed) noteQlikCache(event.file);
+        }
+      }
+    }
+  } catch (e) {
+    body.textContent = "Error: " + e.message;
+  } finally {
+    if (!done.length) acts.remove();
+    $("btnSend").disabled = false;
+    $("chatInput").focus();
+  }
+}
+
+$("chatForm").onsubmit = event => {
+  event.preventDefault();
+  const question = $("chatInput").value.trim();
+  if (!question) return;
+  $("chatInput").value = "";
+  ask(question);
+};
+
+// ----------------------------------------------------------------------
+// Theme. The head script already applied the saved choice; this wires the
+// picker and keeps "Auto" following the machine while the page is open.
+// ----------------------------------------------------------------------
+const THEME_KEY = "qlikai-theme";
+const systemDark = matchMedia("(prefers-color-scheme: dark)");
+let themePref = "system";
+try { themePref = localStorage.getItem(THEME_KEY) || "system"; } catch (_) {}
+
+function applyTheme() {
+  const dark = themePref === "dark" || (themePref !== "light" && systemDark.matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  $("theme").querySelectorAll("button").forEach(button => {
+    button.classList.toggle("on", button.dataset.pick === themePref);
+  });
+}
+
+$("theme").onclick = event => {
+  const pick = event.target.dataset && event.target.dataset.pick;
+  if (!pick) return;
+  themePref = pick;
+  try { localStorage.setItem(THEME_KEY, pick); } catch (_) {}
+  applyTheme();
+};
+
+systemDark.addEventListener("change", () => { if (themePref === "system") applyTheme(); });
+applyTheme();
+
+// ----------------------------------------------------------------------
+// Resizable layout. Each divider drags, side panels snap closed when
+// dragged small, double-click restores the default, and the result is
+// remembered across reloads.
+// ----------------------------------------------------------------------
+const rootStyle = document.documentElement.style;
+const LAYOUT_KEY = "qlikai-layout";
+let layout = {};
+try { layout = JSON.parse(localStorage.getItem(LAYOUT_KEY)) || {}; } catch (_) {}
+
+function applyLayout() {
+  const set = (prop, value) =>
+    value != null ? rootStyle.setProperty(prop, value + "px")
+                  : rootStyle.removeProperty(prop);
+  set("--sections-w", layout.sections);
+  set("--connections-w", layout.connections);
+  set("--chat-h", layout.chat);
+}
+applyLayout();
+
+function saveLayout() {
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch (_) {}
+}
+
+// Below this a panel is unreadable anyway, so it snaps shut instead of
+// lingering as a sliver. Drag it back out (or double-click) to reopen.
+const snapPanel = value => value < 60 ? 0 : Math.min(Math.max(value, 120), 480);
+
+function draggable(handle, key, compute) {
+  handle.addEventListener("pointerdown", event => {
+    event.preventDefault();
+    handle.setPointerCapture(event.pointerId);
+    handle.classList.add("dragging");
+    const move = ev => { layout[key] = compute(ev); applyLayout(); };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", () => {
+      handle.removeEventListener("pointermove", move);
+      handle.classList.remove("dragging");
+      saveLayout();
+    }, {once: true});
+  });
+  handle.addEventListener("dblclick", () => {
+    delete layout[key];
+    applyLayout();
+    saveLayout();
+  });
+}
+
+draggable($("dragSections"), "sections", ev => snapPanel(ev.clientX));
+draggable($("dragConnections"), "connections",
+          ev => snapPanel(window.innerWidth - ev.clientX));
+draggable($("dragChat"), "chat", ev => Math.min(
+  Math.max(window.innerHeight - ev.clientY, 110),
+  Math.round(window.innerHeight * 0.92)
+));
+
+load().catch(e => setStatus("Could not reach Qlik: " + e.message, "bad"));
+</script>
+</body>
+</html>

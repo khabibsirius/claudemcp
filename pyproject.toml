@@ -1,0 +1,15 @@
+# Not a packaged distribution - the modules are run directly from the repo
+# root. This file exists so pytest and ruff pick up consistent settings.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]

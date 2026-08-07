@@ -1,56 +1,87 @@
+"""Dump the full saved properties of every object in an app.
+
+    python dump_object_properties.py
+    python dump_object_properties.py --filter Sales
+    python dump_object_properties.py --type piechart
+
+This is how the property trees in chart_specs.py were derived: build a chart
+by hand in the Qlik client until it renders correctly, dump it here, and copy
+the real shape rather than guessing from the documentation. Use it whenever
+you add a chart type or a chart renders blank for no obvious reason.
+"""
+
+import argparse
 import json
 import sys
 
 from config import APP_NAME
-from qlik_engine import QlikEngine
+from qlik_engine import QlikEngine, QlikEngineError
 
-# Optional: python dump_object_properties.py "Customer Segment"
-# filters to objects whose qId or title contains this text (case-insensitive).
-filter_text = sys.argv[1].lower() if len(sys.argv) > 1 else None
+# Containers and internals rather than visualizations - never interesting here.
+SKIPPED_TYPES = {"sheet", "LoadModel", "loadModel", "MasterObject", "AppPropsList"}
 
-engine = QlikEngine()
 
-try:
-    print(f"Opening '{APP_NAME}'...")
-    engine.open_app(APP_NAME)
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--app", default=APP_NAME, help=f"App to dump (default: {APP_NAME!r})")
+    parser.add_argument(
+        "--filter", dest="filter_text", default=None,
+        help="Only objects whose qId or title contains this text (case-insensitive)",
+    )
+    parser.add_argument(
+        "--type", dest="q_type", default=None,
+        help="Only objects of this qType, e.g. piechart",
+    )
+    return parser.parse_args(argv)
 
-    # GetAllInfos returns every object in the app (sheets, charts, etc.)
-    response = engine.send("GetAllInfos", handle=engine.app_handle)
-    infos = response["result"]["qInfos"]
 
-    print(f"\n{len(infos)} objects found in the app:\n")
+def main(argv=None):
+    args = parse_args(argv)
+    needle = args.filter_text.lower() if args.filter_text else None
 
-    interesting_types = {"sheet"}  # we'll filter to chart-ish objects below
+    try:
+        with QlikEngine() as engine:
+            engine.open_app(args.app)
 
-    for info in infos:
-        q_id = info["qId"]
-        q_type = info["qType"]
+            infos = engine.send("GetAllInfos", handle=engine.app_handle)["result"]["qInfos"]
+            print(f"{len(infos)} object(s) in {args.app!r}\n")
 
-        # Skip internal/system objects, focus on visualizations
-        if q_type in ("sheet", "LoadModel", "loadModel", "MasterObject"):
-            continue
+            shown = 0
+            for info in infos:
+                q_id, q_type = info["qId"], info["qType"]
 
-        try:
-            obj_response = engine.send(
-                "GetObject", handle=engine.app_handle, params=[q_id]
-            )
-            obj_handle = obj_response["result"]["qReturn"]["qHandle"]
-
-            props = engine.send("GetProperties", handle=obj_handle)
-            qprop = props["result"]["qProp"]
-
-            if filter_text:
-                haystack = (q_id + " " + qprop.get("title", "")).lower()
-                if filter_text not in haystack:
+                if q_type in SKIPPED_TYPES:
+                    continue
+                if args.q_type and q_type != args.q_type:
                     continue
 
-            print(f"--- qId={q_id}  qType={q_type} ---")
-            print(json.dumps(qprop, indent=2))
-            print()
+                try:
+                    handle = engine.send(
+                        "GetObject", handle=engine.app_handle, params=[q_id]
+                    )["result"]["qReturn"]["qHandle"]
+                    props = engine.send("GetProperties", handle=handle)["result"]["qProp"]
+                except QlikEngineError as e:
+                    print(f"--- qId={q_id}  qType={q_type} ---")
+                    print(f"  (couldn't read properties: {e})\n")
+                    continue
 
-        except Exception as e:
-            print(f"--- qId={q_id}  qType={q_type} ---")
-            print(f"  (couldn't read properties: {e})\n")
+                if needle and needle not in f"{q_id} {props.get('title', '')}".lower():
+                    continue
 
-finally:
-    engine.close()
+                print(f"--- qId={q_id}  qType={q_type} ---")
+                print(json.dumps(props, indent=2))
+                print()
+                shown += 1
+
+            if not shown:
+                print("No objects matched.")
+
+    except QlikEngineError as e:
+        print(f"Failed: {e}", file=sys.stderr)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
