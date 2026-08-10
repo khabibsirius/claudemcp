@@ -7,7 +7,11 @@
       "Bash(gh repo *)",
       "Read(//c/Users/Hacker/AppData/Local/Temp/claude/c--project-claudemcp/252de5b9-cca2-475d-87e4-61273b11cf7e/scratchpad/qlik-mcp-server/**)",
       "Bash(gh api *)",
-      "Bash(git config *)"
+      "Bash(git config *)",
+      "Bash(perl -i.nulbak -0777 -pe 's/\\\\x00/\\\\\\\\u0000/g' web/index.html)",
+      "Bash(awk '/^\\\\/\\\\/ ---- Markdown/,/^\\\\/\\\\/ getText is a function/' web/index.html)",
+      "Bash(cat)",
+      "Bash(node /c/Users/Hacker/AppData/Local/Temp/claude/c--project-claudemcp/252de5b9-cca2-475d-87e4-61273b11cf7e/scratchpad/sample.js /c/Users/Hacker/AppData/Local/Temp/claude/c--project-claudemcp/252de5b9-cca2-475d-87e4-61273b11cf7e/scratchpad/md.js)"
     ]
   }
 }

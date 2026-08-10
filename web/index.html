@@ -312,6 +312,61 @@
     border: 1px dashed var(--line);
   }
 
+  /* Rendered markdown. Plain bubbles keep pre-wrap for their newlines; here
+     the block tags carry the spacing, so pre-wrap would double every gap. */
+  .msg .body.md { white-space: normal; }
+  .msg .body.md > :first-child { margin-top: 0; }
+  .msg .body.md > :last-child { margin-bottom: 0; }
+  .msg .body.md p { margin: 0 0 9px; }
+  .msg .body.md h1, .msg .body.md h2, .msg .body.md h3,
+  .msg .body.md h4, .msg .body.md h5, .msg .body.md h6 {
+    margin: 15px 0 7px; line-height: 1.3; font-weight: 600;
+  }
+  .msg .body.md h1 { font-size: 1.32em; }
+  .msg .body.md h2 { font-size: 1.18em; }
+  .msg .body.md h3 { font-size: 1.07em; }
+  .msg .body.md h4, .msg .body.md h5, .msg .body.md h6 {
+    font-size: 1em; color: var(--muted);
+  }
+  .msg .body.md h1, .msg .body.md h2 {
+    padding-bottom: 4px; border-bottom: 1px solid var(--line);
+  }
+  .msg .body.md ul, .msg .body.md ol { margin: 0 0 9px; padding-left: 21px; }
+  .msg .body.md li { margin: 2px 0; }
+  .msg .body.md li > ul, .msg .body.md li > ol { margin: 2px 0; }
+  .msg .body.md blockquote {
+    margin: 0 0 9px; padding: 1px 0 1px 11px; color: var(--muted);
+    border-left: 3px solid var(--line);
+  }
+  .msg .body.md hr {
+    border: 0; border-top: 1px solid var(--line); margin: 13px 0;
+  }
+  .msg .body.md a { color: var(--accent); }
+  .msg .body.md code { font: 12.5px/1.5 "Cascadia Code", Consolas, monospace; }
+  .msg .body.md :not(pre) > code {
+    background: var(--chip); border: 1px solid var(--line-soft);
+    padding: 1px 5px; border-radius: 4px;
+  }
+  .msg .body.md pre {
+    margin: 0 0 9px; padding: 9px 11px; border-radius: 8px;
+    background: var(--code-bg); border: 1px solid var(--line);
+    overflow-x: auto; white-space: pre;
+  }
+  .msg .body.md pre[data-lang]::before {
+    content: attr(data-lang); display: block; margin-bottom: 6px;
+    font: 10.5px/1 "Cascadia Code", Consolas, monospace;
+    letter-spacing: .05em; text-transform: uppercase; color: var(--faint);
+  }
+  /* A wide table must scroll inside the bubble, not stretch it off-screen. */
+  .msg .body.md .tablewrap { overflow-x: auto; margin: 0 0 9px; }
+  .msg .body.md table { border-collapse: collapse; font-size: 13px; }
+  .msg .body.md th, .msg .body.md td {
+    border: 1px solid var(--line); padding: 5px 9px; text-align: left;
+  }
+  .msg .body.md th { background: var(--gutter-bg); font-weight: 600; }
+  .msg .body.md th.r, .msg .body.md td.r { text-align: right; }
+  .msg .body.md th.c, .msg .body.md td.c { text-align: center; }
+
   /* Tool calls as chips: pending pulses, done gets a tick, failed a cross. */
   .acts { display: flex; flex-wrap: wrap; gap: 5px; margin: 4px 0 6px; }
   .chip {
@@ -588,6 +643,202 @@ async function copyText(text) {
   }
 }
 
+// ---- Markdown -------------------------------------------------------------
+// The model answers in markdown. Rendering it here instead of pulling in a
+// library keeps the page working on an air-gapped Qlik box. Every value is
+// escaped before a tag is emitted, so neither model output nor a table cell
+// lifted straight out of the user's data can inject markup.
+
+const ESCAPE = {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"};
+const esc = s => String(s).replace(/[&<>"']/g, c => ESCAPE[c]);
+
+const RE_FENCE = /^ {0,3}(`{3,}|~{3,})[ \t]*([\w+#.-]*)[ \t]*$/;
+const RE_HEAD  = /^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
+const RE_HR    = /^ {0,3}([-*_])[ \t]*(?:\1[ \t]*){2,}$/;
+const RE_QUOTE = /^ {0,3}>\s?(.*)$/;
+const RE_ITEM  = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
+const RE_DELIM = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
+
+const startsBlock = l =>
+  RE_FENCE.test(l) || RE_HEAD.test(l) || RE_HR.test(l) ||
+  RE_QUOTE.test(l) || RE_ITEM.test(l);
+
+// Only schemes that cannot execute. Anything else keeps its label as plain
+// text, so a "javascript:" link degrades into words instead of a trap.
+const href = (url, label) =>
+  /^(https?:\/\/|mailto:|#)/i.test(url.replace(/&amp;/g, "&"))
+    ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`
+    : label;
+
+function mdInline(raw) {
+  // Code spans come out first so their contents survive untouched: `**x**`
+  // between backticks has to stay asterisks.
+  // The placeholder is wrapped in angle brackets because esc() has already
+  // removed every raw one, so "<0>" cannot collide with the text itself. The
+  // tags added below are never all-digits, so they survive the restore too.
+  const spans = [];
+  let s = esc(raw).replace(/`([^`]+)`/g, (_, code) =>
+    "<" + (spans.push(`<code>${code}</code>`) - 1) + ">");
+
+  s = s.replace(/!?\[([^\]]*)\]\(([^)\s]+)(?:[ \t]+&quot;[^&]*&quot;)?\)/g,
+                (_, label, url) => href(url, label || url))
+       .replace(/\*\*\*([^*]+)\*\*\*/g, "<strong><em>$1</em></strong>")
+       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+       .replace(/(^|[^*\w])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+       .replace(/(^|[^_\w])__([^_]+)__/g, "$1<strong>$2</strong>")
+       .replace(/(^|[^_\w])_([^_\n]+)_(?![_\w])/g, "$1<em>$2</em>")
+       .replace(/~~([^~]+)~~/g, "<del>$1</del>");
+
+  return s.replace(/<(\d+)>/g, (_, i) => spans[i]);
+}
+
+function renderMarkdown(src) {
+  return mdBlocks(String(src == null ? "" : src).replace(/\r\n?/g, "\n").split("\n"));
+}
+
+function mdBlocks(lines) {
+  const out = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i++; continue; }
+
+    const fence = RE_FENCE.exec(line);
+    if (fence) {
+      const mark = fence[1], lang = fence[2], buf = [];
+      const closes = l => {
+        const m = RE_FENCE.exec(l);
+        return m && m[1][0] === mark[0] && m[1].length >= mark.length && !m[2];
+      };
+      i++;
+      // A fence with no closer is normal mid-stream. Close it and render, so
+      // a code block does not flash as raw text while the tokens arrive.
+      while (i < lines.length && !closes(lines[i])) buf.push(lines[i++]);
+      i++;
+      out.push(`<pre${lang ? ` data-lang="${esc(lang)}"` : ""}>` +
+               `<code>${esc(buf.join("\n"))}</code></pre>`);
+      continue;
+    }
+
+    const head = RE_HEAD.exec(line);
+    if (head) {
+      const n = head[1].length;
+      out.push(`<h${n}>${mdInline(head[2])}</h${n}>`);
+      i++;
+      continue;
+    }
+
+    if (RE_HR.test(line)) { out.push("<hr>"); i++; continue; }
+
+    if (RE_QUOTE.test(line)) {
+      const buf = [];
+      while (i < lines.length && RE_QUOTE.test(lines[i]))
+        buf.push(RE_QUOTE.exec(lines[i++])[1]);
+      out.push(`<blockquote>${mdBlocks(buf)}</blockquote>`);
+      continue;
+    }
+
+    // A table is only a table if the row under the header is the delimiter.
+    if (line.includes("|") && RE_DELIM.test(lines[i + 1] || "")) {
+      const cells = r => r.trim().replace(/^\|/, "").replace(/\|$/, "").split("|")
+                          .map(c => c.trim());
+      const head = cells(line);
+      const align = cells(lines[i + 1]).map(c =>
+        /^:-+:$/.test(c) ? ' class="c"' : /^-+:$/.test(c) ? ' class="r"' : "");
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].trim() && lines[i].includes("|"))
+        rows.push(cells(lines[i++]));
+      out.push(
+        '<div class="tablewrap"><table><thead><tr>' +
+        head.map((c, k) => `<th${align[k] || ""}>${mdInline(c)}</th>`).join("") +
+        "</tr></thead><tbody>" +
+        rows.map(r => "<tr>" + head.map((_, k) =>
+          `<td${align[k] || ""}>${mdInline(r[k] || "")}</td>`).join("") + "</tr>").join("") +
+        "</tbody></table></div>");
+      continue;
+    }
+
+    const item = RE_ITEM.exec(line);
+    if (item) {
+      const ordered = /\d/.test(item[2]);
+      const indent = item[1].length;
+      const items = [];
+      while (i < lines.length) {
+        const m = RE_ITEM.exec(lines[i]);
+        if (!m || m[1].length > indent + 1 || /\d/.test(m[2]) !== ordered) break;
+        const chunk = [m[3]];
+        items.push(chunk);
+        i++;
+        // Indented follow-on lines belong to the item just opened — that is
+        // how a nested list or a second paragraph hangs off a bullet.
+        while (i < lines.length && lines[i].trim() && /^\s{2,}/.test(lines[i]))
+          chunk.push(lines[i++].replace(/^ {1,4}/, ""));
+      }
+      const tag = ordered ? "ol" : "ul";
+      const first = ordered ? parseInt(item[2], 10) : 1;
+      out.push(`<${tag}${first > 1 ? ` start="${first}"` : ""}>` +
+               items.map(c => `<li>${mdListItem(c)}</li>`).join("") +
+               `</${tag}>`);
+      continue;
+    }
+
+    const buf = [];
+    while (i < lines.length) {
+      const l = lines[i];
+      if (!l.trim() || startsBlock(l)) break;
+      if (l.includes("|") && RE_DELIM.test(lines[i + 1] || "")) break;
+      buf.push(l);
+      i++;
+    }
+    // Never leave the cursor unmoved: an unconsumed line would spin forever.
+    if (!buf.length) { buf.push(line); i++; }
+    out.push(`<p>${buf.map(l => mdInline(l.trim())).join("<br>")}</p>`);
+  }
+
+  return out.join("");
+}
+
+// A tight list: the item's own text needs no paragraph wrapper, whether or
+// not a nested list follows it. Blocks after the first keep theirs.
+function mdListItem(chunk) {
+  return mdBlocks(chunk).replace(/^<p>((?:(?!<\/p>)[\s\S])*)<\/p>/, "$1");
+}
+
+// Rendered bodies keep their markdown source so Copy yields what the model
+// actually wrote, not the flattened text the browser ends up showing.
+function setBody(el, src, asMarkdown) {
+  el.dataset.raw = src == null ? "" : src;
+  el.classList.toggle("md", !!asMarkdown);
+  if (asMarkdown) el.innerHTML = renderMarkdown(src);
+  else el.textContent = src;
+}
+
+const bodyText = el => ("raw" in el.dataset ? el.dataset.raw : el.textContent);
+
+// Re-rendering on every token would reflow the log hundreds of times for one
+// long answer. One render per frame looks identical and costs far less.
+function streamBody(el, after) {
+  let pending = null, queued = false;
+  const paint = () => {
+    queued = false;
+    if (pending === null) return;
+    setBody(el, pending, true);
+    if (after) after();
+  };
+  return {
+    update(src) {
+      pending = src;
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(paint);
+    },
+    // Wins over any frame still queued, which would only repaint the same text.
+    set(src) { pending = src; paint(); },
+  };
+}
+
 // getText is a function, not a string: the assistant's reply is still being
 // streamed when its button is created.
 function copyButton(getText) {
@@ -615,8 +866,10 @@ function addMessage(who, body) {
   wrap.firstChild.textContent = who;
   const text = document.createElement("div");
   text.className = "body";
-  text.textContent = body;
-  wrap.firstChild.appendChild(copyButton(() => text.textContent));
+  // Only the assistant writes markdown. What someone typed is shown back to
+  // them exactly as typed, asterisks and all.
+  setBody(text, body, who !== "You");
+  wrap.firstChild.appendChild(copyButton(() => bodyText(text)));
   wrap.appendChild(text);
   $("log").appendChild(wrap);
   $("log").scrollTop = $("log").scrollHeight;
@@ -791,12 +1044,13 @@ async function ask(question) {
   const body = document.createElement("div");
   body.className = "body";
   body.appendChild(typingDots());
-  wrap.firstChild.appendChild(copyButton(() => body.textContent));
+  wrap.firstChild.appendChild(copyButton(() => bodyText(body)));
   wrap.append(acts, body);
   $("log").appendChild(wrap);
 
   const scroll = () => { $("log").scrollTop = $("log").scrollHeight; };
   scroll();
+  const stream = streamBody(body, scroll);
 
   $("btnSend").disabled = true;
   let answer = "";
@@ -843,15 +1097,13 @@ async function ask(question) {
           }
           scroll();
         } else if (event.type === "token") {
-          if (!answer) body.textContent = "";
+          if (!answer) body.textContent = "";   // clears the typing dots
           answer += event.text;
-          body.textContent = answer;
-          scroll();
+          stream.update(answer);
         } else if (event.type === "done") {
-          body.textContent = event.reply || answer || "(no answer)";
-          scroll();
+          stream.set(event.reply || answer || "(no answer)");
         } else if (event.type === "error") {
-          body.textContent = "Error: " + event.message;
+          setBody(body, "Error: " + event.message, false);
           scroll();
         } else if (event.type === "final") {
           if (event.script_changed) {
@@ -864,7 +1116,7 @@ async function ask(question) {
       }
     }
   } catch (e) {
-    body.textContent = "Error: " + e.message;
+    setBody(body, "Error: " + e.message, false);
   } finally {
     if (!done.length) acts.remove();
     $("btnSend").disabled = false;
