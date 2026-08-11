@@ -11,7 +11,18 @@ import websocket
 # The project is a flat set of modules rather than an installed package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import history  # noqa: E402
 from qlik_engine import QlikEngine  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def isolated_history(tmp_path, monkeypatch):
+    """Keep every test's chat history out of the developer's real home.
+
+    session.persist() runs on any turn the web tests drive, so without this
+    a test run quietly files itself into ~/.qlik-ai/history.
+    """
+    monkeypatch.setattr(history, "HISTORY_DIR", str(tmp_path / "history"))
 
 
 class FakeEngineSocket:

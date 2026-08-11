@@ -128,6 +128,21 @@ CHAT_MAX_STEPS = _int_env("CHAT_MAX_STEPS", 30)
 CHAT_MODEL = _str_env("CHAT_MODEL") or OLLAMA_MODEL
 
 
+# ----------------------------------------------------------------------
+# Saved conversations
+# ----------------------------------------------------------------------
+
+# Under the user's home rather than the project, so history survives moving
+# or re-cloning the checkout and never lands in a commit by accident.
+HISTORY_DIR = _str_env(
+    "HISTORY_DIR", str(os.path.join(os.path.expanduser("~"), ".qlik-ai", "history"))
+)
+
+# The sidebar is a flat list and building it reads every file, so the count
+# is capped. 0 disables pruning for anyone who would rather keep the lot.
+HISTORY_MAX = _int_env("HISTORY_MAX", 200)
+
+
 def summary():
     """Human-readable settings dump for smoke tests and error messages.
 

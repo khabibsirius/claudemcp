@@ -263,11 +263,60 @@
     box-shadow: 0 -1px 3px rgba(16, 24, 40, .05);
   }
 
+  /* The saved-chat rail sits beside the conversation, inside the resizable
+     strip, so dragging the chat taller gives both of them the room. */
+  .chatbody { flex: 1; display: flex; min-height: 0; }
+  .convo { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+  .history {
+    width: 208px; flex: none; display: flex; flex-direction: column;
+    min-height: 0; background: var(--raised);
+    border-right: 1px solid var(--line);
+  }
+  .history-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 8px 6px 12px; border-bottom: 1px solid var(--line-soft);
+  }
+  .history-head .panel-title { flex: 1; padding: 0; border: 0; }
+  .history-head button {
+    font-size: 12px; font-weight: 600; padding: 4px 9px; border-radius: 6px;
+  }
+  .history-list { flex: 1; overflow: auto; padding: 5px; }
+  .history-empty {
+    color: var(--faint); font-size: 12px; padding: 10px 8px; line-height: 1.45;
+  }
+
+  /* Row is the hit target; the delete button rides on top of it, so the two
+     cannot be nested buttons. */
+  .chat-item { position: relative; display: flex; }
+  .chat-item .open {
+    flex: 1; min-width: 0; text-align: left; border: 1px solid transparent;
+    background: transparent; padding: 6px 26px 6px 8px; border-radius: 7px;
+    display: flex; flex-direction: column; gap: 1px; font-weight: 500;
+  }
+  .chat-item .open:hover { background: var(--chip); border-color: var(--line); }
+  .chat-item.on .open {
+    background: var(--accent-soft); border-color: var(--accent); color: var(--ink);
+  }
+  .chat-item .t {
+    font-size: 12.5px; line-height: 1.35;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .chat-item .m { font-size: 10.5px; color: var(--faint); }
+  .chat-item .del {
+    position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+    border: 0; background: transparent; color: var(--faint);
+    font-size: 15px; line-height: 1; padding: 3px 6px; border-radius: 5px;
+    opacity: 0; transition: opacity .12s;
+  }
+  .chat-item:hover .del, .chat-item .del:focus-visible { opacity: 1; }
+  .chat-item .del:hover { color: var(--bad); background: var(--bad-soft); }
+
   /* Before the first message the input is the main event, not a strip at
      the bottom of the screen: welcome, suggestions and the box sit together
      in the middle. The first question docks everything back down so the
-     history has the room. */
-  .chat.empty { justify-content: center; }
+     conversation has the room. */
+  .chat.empty .convo { justify-content: center; }
   .chat.empty .log { flex: 0 0 auto; overflow: visible; padding-bottom: 0; }
   .chat.empty .log .msg { max-width: 760px; }
   .chat.empty form { border-top: 0; }
@@ -470,15 +519,27 @@
 
 <div class="chat" id="chat">
   <div class="divider-h" id="dragChat" title="Drag to resize · double-click to reset"></div>
-  <div class="log" id="log"></div>
-  <div class="chips" id="chips"></div>
-  <form id="chatForm">
-    <input id="chatInput" autocomplete="off"
-           placeholder="Ask for anything: load the csvs in my downloads folder and merge them / build me a sales dashboard / what is total sales by market?">
-    <button class="primary" id="btnSend">Send</button>
-  </form>
-  <div class="hint" id="chatHint">One box for everything — loading, cleaning, dashboards,
-    questions. The assistant writes the script; you press <b>Load data</b> to run it.</div>
+  <div class="chatbody">
+    <aside class="history" id="history">
+      <div class="history-head">
+        <span class="panel-title">Chats</span>
+        <button type="button" id="btnNewChat" title="Start a new conversation">+ New</button>
+      </div>
+      <div class="history-list" id="historyList"></div>
+    </aside>
+
+    <div class="convo">
+      <div class="log" id="log"></div>
+      <div class="chips" id="chips"></div>
+      <form id="chatForm">
+        <input id="chatInput" autocomplete="off"
+               placeholder="Ask for anything: load the csvs in my downloads folder and merge them / build me a sales dashboard / what is total sales by market?">
+        <button class="primary" id="btnSend">Send</button>
+      </form>
+      <div class="hint" id="chatHint">One box for everything — loading, cleaning, dashboards,
+        questions. The assistant writes the script; you press <b>Load data</b> to run it.</div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -876,6 +937,135 @@ function addMessage(who, body) {
   return text;
 }
 
+// ---- Saved conversations --------------------------------------------------
+// The server owns the history: its message list is what the model actually
+// remembers, so opening a chat has to go through it rather than being
+// replayed from anything kept here. This code only paints the result.
+
+let chatId = null;
+
+// Coarse on purpose: the exact minute a chat was last touched is never the
+// question, only roughly how long ago it was.
+function ago(iso) {
+  if (!iso) return "";
+  const seconds = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (!isFinite(seconds)) return "";
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
+  if (seconds < 86400) return Math.floor(seconds / 3600) + "h ago";
+  if (seconds < 604800) return Math.floor(seconds / 86400) + "d ago";
+  return new Date(iso).toLocaleDateString();
+}
+
+function renderHistory(chats, activeId) {
+  if (activeId !== undefined) chatId = activeId;
+  const box = $("historyList");
+  box.innerHTML = "";
+
+  if (!chats || !chats.length) {
+    const empty = document.createElement("div");
+    empty.className = "history-empty";
+    empty.textContent = "No saved chats yet — ask something and this one saves itself.";
+    box.appendChild(empty);
+    return;
+  }
+
+  for (const chat of chats) {
+    const row = document.createElement("div");
+    row.className = "chat-item" + (chat.id === chatId ? " on" : "");
+
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "open";
+    open.title = chat.title || "";
+    const title = document.createElement("span");
+    title.className = "t";
+    title.textContent = chat.title || "Untitled";
+    const meta = document.createElement("span");
+    meta.className = "m";
+    meta.textContent = [
+      chat.turns + (chat.turns === 1 ? " turn" : " turns"),
+      chat.app,
+      ago(chat.updated),
+    ].filter(Boolean).join(" · ");
+    open.append(title, meta);
+    open.onclick = () => openChat(chat.id);
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "del";
+    del.textContent = "×";
+    del.title = "Delete this chat";
+    del.onclick = event => {
+      event.stopPropagation();
+      removeChat(chat.id, chat.title);
+    };
+
+    row.append(open, del);
+    box.appendChild(row);
+  }
+}
+
+// Only what was actually said: the server leaves the system prompt and the
+// tool traffic out, so reopening a chat shows the conversation, not the log.
+function repaint(entries) {
+  $("log").innerHTML = "";
+  for (const entry of entries || []) {
+    addMessage(entry.role === "user" ? "You" : "Assistant", entry.content);
+  }
+  welcome();
+  $("log").scrollTop = $("log").scrollHeight;
+}
+
+async function refreshHistory() {
+  // History is a convenience. Losing the list must not take the chat with it.
+  try {
+    const result = await api("/api/chats");
+    renderHistory(result.chats, result.chat_id);
+  } catch (e) {
+    console.warn("Could not list saved chats:", e.message);
+  }
+}
+
+async function openChat(id) {
+  if (id === chatId) return;
+  try {
+    const chat = await api("/api/chats/" + encodeURIComponent(id));
+    chatId = chat.chat_id;
+    repaint(chat.transcript);
+    // Reopening moves the chat you left up the list, so re-read the order.
+    await refreshHistory();
+  } catch (e) {
+    setStatus("Could not open that chat: " + e.message, "bad");
+  }
+}
+
+async function newChat() {
+  try {
+    const result = await api("/api/chats", {method: "POST"});
+    repaint([]);
+    renderHistory(result.chats, result.chat_id);
+    $("chatInput").focus();
+  } catch (e) {
+    setStatus("Could not start a new chat: " + e.message, "bad");
+  }
+}
+
+async function removeChat(id, title) {
+  if (!confirm(`Delete "${title || "this chat"}"? This cannot be undone.`)) return;
+  try {
+    const wasOpen = id === chatId;
+    const result = await api("/api/chats/" + encodeURIComponent(id), {method: "DELETE"});
+    // Deleting the chat you are reading leaves a fresh empty one in its place.
+    if (wasOpen) repaint([]);
+    renderHistory(result.chats, result.chat_id);
+  } catch (e) {
+    setStatus("Could not delete that chat: " + e.message, "bad");
+  }
+}
+
+$("btnNewChat").onclick = newChat;
+
 function welcome() {
   if (!$("log").children.length) {
     addMessage("Assistant",
@@ -933,7 +1123,9 @@ async function select(change) {
 }
 
 $("appSel").onchange = event => {
-  $("log").innerHTML = "";   // the conversation was about the previous app
+  // The conversation was about the previous app's fields, so the server
+  // files it away and starts a fresh one. load() then paints the new state.
+  $("log").innerHTML = "";
   select({app: event.target.value});
 };
 $("modelSel").onchange = event => {
@@ -967,7 +1159,11 @@ async function load() {
   renderTabs(state.tabs);
   renderConnections(state.connections);
   renderChips();
-  welcome();
+  // The server kept the conversation across the refresh; put it back on
+  // screen rather than greeting someone mid-chat with an empty log.
+  chatId = state.chat_id || null;
+  repaint(state.transcript);
+  refreshHistory();
   try {
     renderOptions(await api("/api/options"));
   } catch (e) {
@@ -1106,6 +1302,9 @@ async function ask(question) {
           setBody(body, "Error: " + event.message, false);
           scroll();
         } else if (event.type === "final") {
+          // The first question is what names the chat, and may be what
+          // created it — so the rail is refreshed from the same event.
+          if (event.chats) renderHistory(event.chats, event.chat_id);
           if (event.script_changed) {
             setScript(event.script);
             renderTabs(event.tabs);

@@ -29,6 +29,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+import history
 import session
 from chat_tools import LOAD_EDITOR_TOOLS, run_agent, stream_agent
 from config import APP_NAME, CHAT_MODEL
@@ -70,6 +71,23 @@ def engine():
         return session.engine()
     except QlikEngineError as e:
         raise HTTPException(503, str(e)) from e
+
+
+def transcript(messages):
+    """The part of a conversation worth showing back to the person.
+
+    The stored list is what the model sees: the system prompt, tool calls and
+    their results are all in there. Replaying those would show the user a wall
+    of JSON they never wrote and never read the first time.
+    """
+    out = []
+    for message in messages or []:
+        role = message.get("role")
+        content = (message.get("content") or "").strip()
+        # An assistant message with no text is a bare tool call.
+        if role in ("user", "assistant") and content:
+            out.append({"role": role, "content": content})
+    return out
 
 
 # ----------------------------------------------------------------------
@@ -118,6 +136,8 @@ def get_state():
         "has_data": bool(safely(engine_.get_fields, [])),
         "allow_reload": session.allow_reload(),
         "assistant_ready": session.assistant_ready(),
+        "chat_id": session.chat_id(),
+        "transcript": transcript(session.messages()),
     }
 
 
@@ -246,6 +266,7 @@ def post_chat(body: ChatMessage):
             log.exception("Chat turn failed")
             raise HTTPException(500, f"{type(e).__name__}: {e}") from e
 
+        session.persist()
         after = engine_.get_script()
 
     sheets = engine_.list_sheets()
@@ -295,6 +316,7 @@ def post_chat_stream(body: ChatMessage):
                 ):
                     yield _sse(event)
 
+                session.persist()
                 after = engine_.get_script()
                 sheets = engine_.list_sheets()
 
@@ -306,6 +328,10 @@ def post_chat_stream(body: ChatMessage):
                 "sheets": sheets,
                 "sheets_changed": len(sheets) != sheets_before,
                 "file": engine_.app_file_info(),
+                # The sidebar needs to learn the new title after the first
+                # question, and the id if this turn is what created the chat.
+                "chat_id": session.chat_id(),
+                "chats": history.listing(),
             })
         except Exception as e:
             log.exception("Streamed chat turn failed")
@@ -322,7 +348,50 @@ def post_chat_stream(body: ChatMessage):
 @app.post("/api/reset-chat")
 def post_reset_chat():
     session.reset_chat()
-    return {"ok": True}
+    return {"ok": True, "chat_id": session.chat_id()}
+
+
+# ----------------------------------------------------------------------
+# Saved conversations
+# ----------------------------------------------------------------------
+
+@app.get("/api/chats")
+def get_chats():
+    """Every saved chat, newest first, plus which one is open."""
+    return {"chats": history.listing(), "chat_id": session.chat_id()}
+
+
+@app.post("/api/chats")
+def post_chats():
+    """Start a new conversation, filing the current one away."""
+    session.reset_chat()
+    return {"ok": True, "chat_id": session.chat_id(), "chats": history.listing()}
+
+
+@app.get("/api/chats/{chat_id}")
+def get_chat(chat_id: str):
+    """Reopen a saved chat: restores the model's context and the transcript."""
+    if not history.valid_id(chat_id):
+        raise HTTPException(404, "No such chat.")
+
+    record = session.load_chat(chat_id)
+    if record is None:
+        raise HTTPException(404, "That chat could not be read.")
+
+    return {
+        "chat_id": chat_id,
+        "title": record.get("title"),
+        "app": record.get("app"),
+        "transcript": transcript(record.get("messages")),
+    }
+
+
+@app.delete("/api/chats/{chat_id}")
+def delete_chat(chat_id: str):
+    if not history.valid_id(chat_id):
+        raise HTTPException(404, "No such chat.")
+    session.delete_chat(chat_id)
+    return {"ok": True, "chat_id": session.chat_id(), "chats": history.listing()}
 
 
 # The same tools, same session, over MCP - so Claude Code and the browser are

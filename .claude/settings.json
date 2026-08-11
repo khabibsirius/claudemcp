@@ -11,7 +11,11 @@
       "Bash(perl -i.nulbak -0777 -pe 's/\\\\x00/\\\\\\\\u0000/g' web/index.html)",
       "Bash(awk '/^\\\\/\\\\/ ---- Markdown/,/^\\\\/\\\\/ getText is a function/' web/index.html)",
       "Bash(cat)",
-      "Bash(node /c/Users/Hacker/AppData/Local/Temp/claude/c--project-claudemcp/252de5b9-cca2-475d-87e4-61273b11cf7e/scratchpad/sample.js /c/Users/Hacker/AppData/Local/Temp/claude/c--project-claudemcp/252de5b9-cca2-475d-87e4-61273b11cf7e/scratchpad/md.js)"
+      "Bash(node /c/Users/Hacker/AppData/Local/Temp/claude/c--project-claudemcp/252de5b9-cca2-475d-87e4-61273b11cf7e/scratchpad/sample.js /c/Users/Hacker/AppData/Local/Temp/claude/c--project-claudemcp/252de5b9-cca2-475d-87e4-61273b11cf7e/scratchpad/md.js)",
+      "Bash(python -m pytest tests/test_history.py -q)",
+      "Bash(echo \"=== did earlier runs pollute the real store? ===\"; ls -la ~/.qlik-ai/history 2>&1 | head)",
+      "Read(//c/Users/Hacker/.qlik-ai/**)",
+      "Bash(python -m pytest tests/ -q)"
     ]
   }
 }

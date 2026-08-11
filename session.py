@@ -12,6 +12,7 @@ import threading
 
 import ollama
 
+import history
 from chat_tools import SYSTEM_PROMPT
 from config import APP_NAME, CHAT_MODEL, OLLAMA_HOST
 from ollama_client import OllamaError, pick_tool_model
@@ -32,6 +33,10 @@ _state = {
     "model": None,
     "client": None,
     "messages": [],
+    # The saved conversation these messages belong to. Minted on the first
+    # reset or the first save, so a server that is never chatted to writes
+    # nothing to disk.
+    "chat_id": None,
     # Whether the assistant may run a reload itself. On by default: with it
     # off, "load my data and chart it" stalls halfway and the model reports
     # that reloading is impossible rather than that it needs a click.
@@ -178,7 +183,70 @@ def messages():
     return _state["messages"]
 
 
-def reset_chat():
+def chat_id():
+    return _state["chat_id"]
+
+
+def persist():
+    """Write the open conversation to disk. Never fatal to a chat turn.
+
+    An unwritable history directory should cost the user their history, not
+    the answer they are waiting for - so a failure here is logged and the
+    turn still returns.
+    """
     with _lock:
+        if _state["chat_id"] is None:
+            _state["chat_id"] = history.new_id()
+        try:
+            return history.save(_state["chat_id"], _state["messages"], _state["app_name"])
+        except Exception:
+            log.exception("Could not save chat history")
+            return None
+
+
+def reset_chat():
+    """Start a new conversation, keeping the one being replaced.
+
+    Also reached by open_app(): switching apps ends the chat, and the old one
+    is worth keeping even though nothing asked for it to be saved.
+    """
+    with _lock:
+        if _state["chat_id"] is not None:
+            persist()
+        _state["chat_id"] = history.new_id()
         _state["messages"] = [{"role": "system", "content": SYSTEM_PROMPT}]
     return _state["messages"]
+
+
+def load_chat(chat_id_):
+    """Reopen a saved conversation as the live one.
+
+    The saved messages become the model's context again, not just the
+    transcript on screen - otherwise the assistant would remember nothing of
+    the chat the user is looking at.
+    """
+    record = history.load(chat_id_)
+    if record is None:
+        return None
+
+    with _lock:
+        if _state["chat_id"] is not None and _state["chat_id"] != chat_id_:
+            persist()
+        messages_ = record["messages"]
+        # A history file written before the prompt changed - or hand-edited -
+        # still has to start with the rules the tools are described by.
+        if not messages_ or messages_[0].get("role") != "system":
+            messages_ = [{"role": "system", "content": SYSTEM_PROMPT}] + messages_
+        _state["messages"] = messages_
+        _state["chat_id"] = chat_id_
+    return record
+
+
+def delete_chat(chat_id_):
+    """Remove a saved chat, starting a new one if it was the open chat."""
+    with _lock:
+        history.delete(chat_id_)
+        if _state["chat_id"] == chat_id_:
+            _state["chat_id"] = history.new_id()
+            _state["messages"] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    return True
