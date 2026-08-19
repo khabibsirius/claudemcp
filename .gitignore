@@ -1,5 +1,9 @@
 # Secrets / local config
 .env
+
+# The institution's own definitions - theirs, not the project's.
+# glossary.example.md is the template that is committed.
+glossary.md
 *.pem
 certs/
 

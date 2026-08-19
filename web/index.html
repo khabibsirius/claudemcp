@@ -478,52 +478,53 @@
     <div class="name">Qlik <span>AI</span></div>
   </div>
   <span class="badge" id="meta"></span>
-  <label class="pick">App <select id="appSel"></select></label>
-  <label class="pick">Model <select id="modelSel"></select></label>
+  <label class="pick"><span data-i18n="app">App</span> <select id="appSel"></select></label>
+  <label class="pick"><span data-i18n="model">Model</span> <select id="modelSel"></select></label>
   <span class="spacer"></span>
-  <div class="theme" id="theme" role="group" aria-label="Colour theme">
-    <button type="button" data-pick="light" title="Light theme">☀ Light</button>
-    <button type="button" data-pick="dark" title="Dark theme">☾ Dark</button>
-    <button type="button" data-pick="system" title="Follow this machine's setting">Auto</button>
+  <label class="pick"><span data-i18n="language">Language</span> <select id="langSel"></select></label>
+  <div class="theme" id="theme" role="group" data-i18n-aria="colourTheme" aria-label="Colour theme">
+    <button type="button" data-pick="light" data-i18n-title="lightTitle" data-i18n="light" title="Light theme">☀ Light</button>
+    <button type="button" data-pick="dark" data-i18n-title="darkTitle" data-i18n="dark" title="Dark theme">☾ Dark</button>
+    <button type="button" data-pick="system" data-i18n-title="autoTitle" data-i18n="auto" title="Follow this machine's setting">Auto</button>
   </div>
-  <label class="switch" title="With this off, the assistant can prepare a script but you must press Load data yourself.">
+  <label class="switch" data-i18n-title="allowReloadTitle" title="With this off, the assistant can prepare a script but you must press Load data yourself.">
     <input type="checkbox" id="allowReload" checked>
     <span class="track"></span>
-    assistant may load data
+    <span data-i18n="allowReload">assistant may load data</span>
   </label>
-  <button id="btnSave">Save</button>
-  <button id="btnReload" class="primary"><span class="spin"></span>Load data</button>
+  <button id="btnSave" data-i18n="save">Save</button>
+  <button id="btnReload" class="primary"><span class="spin"></span><span data-i18n="loadData">Load data</span></button>
 </header>
 
 <main>
   <div class="col sections">
-    <div class="panel-title">Sections</div>
+    <div class="panel-title" data-i18n="sections">Sections</div>
     <div class="list" id="tabs"></div>
   </div>
-  <div class="divider-v" id="dragSections" title="Drag to resize · double-click to reset"></div>
+  <div class="divider-v" id="dragSections" data-i18n-title="dragTitle" title="Drag to resize · double-click to reset"></div>
 
   <div class="col editor">
     <div class="code">
       <div class="gutter" id="gutter"></div>
-      <textarea id="script" spellcheck="false" placeholder="Loading…"></textarea>
+      <textarea id="script" spellcheck="false" data-i18n-ph="loading" placeholder="Loading…"></textarea>
     </div>
     <div class="editor-status" id="status"></div>
   </div>
 
-  <div class="divider-v" id="dragConnections" title="Drag to resize · double-click to reset"></div>
+  <div class="divider-v" id="dragConnections" data-i18n-title="dragTitle" title="Drag to resize · double-click to reset"></div>
   <div class="col connections">
-    <div class="panel-title">Data connections</div>
+    <div class="panel-title" data-i18n="connections">Data connections</div>
     <div class="list" id="connections"></div>
   </div>
 </main>
 
 <div class="chat" id="chat">
-  <div class="divider-h" id="dragChat" title="Drag to resize · double-click to reset"></div>
+  <div class="divider-h" id="dragChat" data-i18n-title="dragTitle" title="Drag to resize · double-click to reset"></div>
   <div class="chatbody">
     <aside class="history" id="history">
       <div class="history-head">
-        <span class="panel-title">Chats</span>
-        <button type="button" id="btnNewChat" title="Start a new conversation">+ New</button>
+        <span class="panel-title" data-i18n="chats">Chats</span>
+        <button type="button" id="btnNewChat" data-i18n-title="newChatTitle" data-i18n="newChat" title="Start a new conversation">+ New</button>
       </div>
       <div class="history-list" id="historyList"></div>
     </aside>
@@ -532,9 +533,9 @@
       <div class="log" id="log"></div>
       <div class="chips" id="chips"></div>
       <form id="chatForm">
-        <input id="chatInput" autocomplete="off"
+        <input id="chatInput" autocomplete="off" data-i18n-ph="askPlaceholder"
                placeholder="Ask for anything: load the csvs in my downloads folder and merge them / build me a sales dashboard / what is total sales by market?">
-        <button class="primary" id="btnSend">Send</button>
+        <button class="primary" id="btnSend" data-i18n="send">Send</button>
       </form>
       <div class="hint" id="chatHint">One box for everything — loading, cleaning, dashboards,
         questions. The assistant writes the script; you press <b>Load data</b> to run it.</div>
@@ -546,12 +547,272 @@
 const $ = id => document.getElementById(id);
 let currentTab = null;
 
-const SUGGESTIONS = [
-  "What data is loaded right now?",
-  "Build me a dashboard from this data",
-  "Clean the data — drop useless columns",
-  "Add Year and Month columns from the date field",
-];
+// ----------------------------------------------------------------------
+// Language
+// ----------------------------------------------------------------------
+// The assistant answers in the reader's language. The software around it did
+// not, so a banker in Tashkent got Uzbek prose inside an English shell -
+// including the warning that Load data replaces every row, which is the one
+// message they most need to be able to read before clicking through it.
+//
+// Data is never translated. Field names, region names, deposit types and
+// everything else read out of the app keep the spelling Qlik has for them;
+// only the software's own words change.
+
+const LANGUAGES = [["en", "English"], ["ru", "Русский"], ["uz", "O'zbekcha"]];
+
+const STRINGS = {
+  en: {
+    language: "Language",
+    app: "App",
+    model: "Model",
+    colourTheme: "Colour theme",
+    light: "☀ Light",
+    dark: "☾ Dark",
+    auto: "Auto",
+    lightTitle: "Light theme",
+    darkTitle: "Dark theme",
+    autoTitle: "Follow this machine's setting",
+    allowReload: "assistant may load data",
+    allowReloadTitle: "With this off, the assistant can prepare a script but you must press Load data yourself.",
+    save: "Save",
+    loadData: "Load data",
+    sections: "Sections",
+    connections: "Data connections",
+    chats: "Chats",
+    newChat: "+ New",
+    newChatTitle: "Start a new conversation",
+    dragTitle: "Drag to resize · double-click to reset",
+    loading: "Loading…",
+    send: "Send",
+    askPlaceholder: "Ask for anything: load the csvs in my downloads folder and merge them / build me a sales dashboard / what is total sales by market?",
+    askPlaceholderOffline: "Assistant unavailable - start Ollama, then just type here again.",
+    hint: "One box for everything - loading, cleaning, dashboards, questions. The assistant writes the script; you press Load data to run it.",
+    hintOffline: "Ollama isn't running, so the assistant is off. Everything else - the editor, Load data, Save - still works.",
+    welcome: "Hi — I can load and clean data, write the load script, and build dashboards in this app. Describe what you want, or try one of the suggestions below.",
+    suggestions: [
+      "What data is loaded right now?",
+      "Build me a dashboard from this data",
+      "Clean the data — drop useless columns",
+      "Add Year and Month columns from the date field",
+    ],
+    noConnections: "None yet — ask the assistant to add a folder as a data source.",
+    noChats: "No saved chats yet — ask something and this one saves itself.",
+    untitled: "Untitled",
+    turns: "{n} turns",
+    turnOne: "1 turn",
+    deleteChatTitle: "Delete this chat",
+    deleteConfirm: "Delete \"{title}\"? This cannot be undone.",
+    thisChat: "this chat",
+    copy: "Copy",
+    copied: "Copied ✓",
+    pressCtrlC: "Press Ctrl+C",
+    copyTitle: "Copy this message",
+    assistant: "Assistant",
+    you: "You",
+    note: "note",
+    justNow: "just now",
+    minutesAgo: "{n}m ago",
+    hoursAgo: "{n}h ago",
+    daysAgo: "{n}d ago",
+    switching: "Switching…",
+    couldNotSwitch: "Could not switch: {error}",
+    saving: "Saving…",
+    saved: "✓ Saved to the app file{stamp}. Press Load data to run it.",
+    savedStamp: " (saved {when})",
+    notSaved: "Not saved: {error}",
+    loadConfirm: "Load data replaces every row currently in this app. Continue?",
+    loadingData: "Loading data… this can take a while for a large source.",
+    loadedRows: "✓ Loaded {rows} rows.\n{tables}",
+    loadFailed: "Load failed:\n{error}",
+    scriptChanged: "The assistant changed the script. Review it, then press Load data.",
+    couldNotReachQlik: "Could not reach Qlik: {error}",
+    couldNotOpenChat: "Could not open that chat: {error}",
+    couldNotStartChat: "Could not start a new chat: {error}",
+    couldNotDeleteChat: "Could not delete that chat: {error}",
+    cloudModelConfirm: "This is a cloud model. Field names, sample values and query results will be sent to Ollama's servers instead of staying on this machine.\n\nContinue?",
+    qlikCacheNote: "Saved to the app file{stamp}. Qlik Sense Desktop won't show new sheets in a window that already had this app open — close the app in Qlik and open it again. Don't press Save in Qlik first: its older copy would overwrite this.",
+  },
+
+  ru: {
+    language: "Язык",
+    app: "Приложение",
+    model: "Модель",
+    colourTheme: "Цветовая тема",
+    light: "☀ Светлая",
+    dark: "☾ Тёмная",
+    auto: "Авто",
+    lightTitle: "Светлая тема",
+    darkTitle: "Тёмная тема",
+    autoTitle: "Как в настройках системы",
+    allowReload: "ассистент может загружать данные",
+    allowReloadTitle: "Если выключено, ассистент подготовит скрипт, но «Загрузить данные» нажимаете вы.",
+    save: "Сохранить",
+    loadData: "Загрузить данные",
+    sections: "Разделы",
+    connections: "Подключения к данным",
+    chats: "Чаты",
+    newChat: "+ Новый",
+    newChatTitle: "Начать новый разговор",
+    dragTitle: "Потяните, чтобы изменить размер · двойной щелчок — сброс",
+    loading: "Загрузка…",
+    send: "Отправить",
+    askPlaceholder: "Спросите что угодно: загрузите csv из папки загрузок и объедините их / постройте дашборд по продажам / какова сумма продаж по рынкам?",
+    askPlaceholderOffline: "Ассистент недоступен — запустите Ollama и напишите снова.",
+    hint: "Одно поле для всего — загрузка, очистка, дашборды, вопросы. Ассистент пишет скрипт; вы нажимаете «Загрузить данные».",
+    hintOffline: "Ollama не запущена, ассистент выключен. Всё остальное — редактор, загрузка данных, сохранение — работает.",
+    welcome: "Здравствуйте — я могу загрузить и очистить данные, написать скрипт загрузки и построить дашборды в этом приложении. Опишите, что нужно, или выберите подсказку ниже.",
+    suggestions: [
+      "Какие данные сейчас загружены?",
+      "Постройте дашборд по этим данным",
+      "Очистите данные — уберите бесполезные столбцы",
+      "Добавьте столбцы Год и Месяц из поля даты",
+    ],
+    noConnections: "Пока нет — попросите ассистента добавить папку как источник данных.",
+    noChats: "Сохранённых чатов пока нет — задайте вопрос, и этот сохранится сам.",
+    untitled: "Без названия",
+    turns: "реплик: {n}",
+    turnOne: "реплик: 1",
+    deleteChatTitle: "Удалить этот чат",
+    deleteConfirm: "Удалить «{title}»? Это необратимо.",
+    thisChat: "этот чат",
+    copy: "Копировать",
+    copied: "Скопировано ✓",
+    pressCtrlC: "Нажмите Ctrl+C",
+    copyTitle: "Копировать сообщение",
+    assistant: "Ассистент",
+    you: "Вы",
+    note: "заметка",
+    justNow: "только что",
+    minutesAgo: "{n} мин назад",
+    hoursAgo: "{n} ч назад",
+    daysAgo: "{n} дн назад",
+    switching: "Переключение…",
+    couldNotSwitch: "Не удалось переключить: {error}",
+    saving: "Сохранение…",
+    saved: "✓ Сохранено в файл приложения{stamp}. Нажмите «Загрузить данные», чтобы выполнить.",
+    savedStamp: " (сохранено {when})",
+    notSaved: "Не сохранено: {error}",
+    loadConfirm: "«Загрузить данные» заменит все строки в этом приложении. Продолжить?",
+    loadingData: "Загрузка данных… для большого источника это может занять время.",
+    loadedRows: "✓ Загружено строк: {rows}.\n{tables}",
+    loadFailed: "Ошибка загрузки:\n{error}",
+    scriptChanged: "Ассистент изменил скрипт. Просмотрите его и нажмите «Загрузить данные».",
+    couldNotReachQlik: "Не удалось подключиться к Qlik: {error}",
+    couldNotOpenChat: "Не удалось открыть чат: {error}",
+    couldNotStartChat: "Не удалось начать новый чат: {error}",
+    couldNotDeleteChat: "Не удалось удалить чат: {error}",
+    cloudModelConfirm: "Это облачная модель. Имена полей, примеры значений и результаты запросов будут отправлены на серверы Ollama, а не останутся на этой машине.\n\nПродолжить?",
+    qlikCacheNote: "Сохранено в файл приложения{stamp}. Qlik Sense Desktop не покажет новые листы в окне, где это приложение уже было открыто — закройте его в Qlik и откройте заново. Не нажимайте сначала «Сохранить» в Qlik: его старая копия перезапишет эту.",
+  },
+
+  uz: {
+    language: "Til",
+    app: "Ilova",
+    model: "Model",
+    colourTheme: "Rang mavzusi",
+    light: "☀ Yorug'",
+    dark: "☾ Qorong'i",
+    auto: "Avto",
+    lightTitle: "Yorug' mavzu",
+    darkTitle: "Qorong'i mavzu",
+    autoTitle: "Tizim sozlamasiga mos",
+    allowReload: "assistent ma'lumot yuklashi mumkin",
+    allowReloadTitle: "O'chirilgan bo'lsa, assistent skript tayyorlaydi, lekin «Ma'lumotni yuklash» tugmasini o'zingiz bosasiz.",
+    save: "Saqlash",
+    loadData: "Ma'lumotni yuklash",
+    sections: "Bo'limlar",
+    connections: "Ma'lumot ulanishlari",
+    chats: "Suhbatlar",
+    newChat: "+ Yangi",
+    newChatTitle: "Yangi suhbat boshlash",
+    dragTitle: "O'lchamini o'zgartirish uchun torting · ikki marta bosing — asliga qaytadi",
+    loading: "Yuklanmoqda…",
+    send: "Yuborish",
+    askPlaceholder: "Xohlagan narsangizni so'rang: yuklamalar papkasidagi csv fayllarni yuklab birlashtiring / savdo bo'yicha dashbord tuzing / bozorlar bo'yicha jami savdo qancha?",
+    askPlaceholderOffline: "Assistent mavjud emas — Ollama'ni ishga tushiring va qaytadan yozing.",
+    hint: "Hammasi uchun bitta maydon — yuklash, tozalash, dashbordlar, savollar. Assistent skript yozadi; siz «Ma'lumotni yuklash» tugmasini bosasiz.",
+    hintOffline: "Ollama ishlamayapti, shuning uchun assistent o'chiq. Qolgani — muharrir, ma'lumot yuklash, saqlash — ishlayveradi.",
+    welcome: "Salom — men ma'lumotni yuklay va tozalay olaman, yuklash skriptini yozaman va bu ilovada dashbordlar tuzaman. Nima kerakligini yozing yoki quyidagi takliflardan birini tanlang.",
+    suggestions: [
+      "Hozir qanday ma'lumot yuklangan?",
+      "Shu ma'lumotdan dashbord tuzing",
+      "Ma'lumotni tozalang — keraksiz ustunlarni olib tashlang",
+      "Sana maydonidan Yil va Oy ustunlarini qo'shing",
+    ],
+    noConnections: "Hozircha yo'q — assistentdan papkani ma'lumot manbai sifatida qo'shishni so'rang.",
+    noChats: "Saqlangan suhbatlar yo'q — biror narsa so'rang, bu suhbat o'zi saqlanadi.",
+    untitled: "Nomsiz",
+    turns: "{n} ta almashinuv",
+    turnOne: "1 ta almashinuv",
+    deleteChatTitle: "Bu suhbatni o'chirish",
+    deleteConfirm: "«{title}» o'chirilsinmi? Buni qaytarib bo'lmaydi.",
+    thisChat: "bu suhbat",
+    copy: "Nusxalash",
+    copied: "Nusxalandi ✓",
+    pressCtrlC: "Ctrl+C bosing",
+    copyTitle: "Xabardan nusxa olish",
+    assistant: "Assistent",
+    you: "Siz",
+    note: "eslatma",
+    justNow: "hozirgina",
+    minutesAgo: "{n} daqiqa oldin",
+    hoursAgo: "{n} soat oldin",
+    daysAgo: "{n} kun oldin",
+    switching: "O'tkazilmoqda…",
+    couldNotSwitch: "O'tkazib bo'lmadi: {error}",
+    saving: "Saqlanmoqda…",
+    saved: "✓ Ilova fayliga saqlandi{stamp}. Ishga tushirish uchun «Ma'lumotni yuklash» tugmasini bosing.",
+    savedStamp: " ({when} da saqlandi)",
+    notSaved: "Saqlanmadi: {error}",
+    loadConfirm: "«Ma'lumotni yuklash» bu ilovadagi barcha qatorlarni almashtiradi. Davom etilsinmi?",
+    loadingData: "Ma'lumot yuklanmoqda… katta manba uchun bu biroz vaqt olishi mumkin.",
+    loadedRows: "✓ {rows} ta qator yuklandi.\n{tables}",
+    loadFailed: "Yuklash muvaffaqiyatsiz:\n{error}",
+    scriptChanged: "Assistent skriptni o'zgartirdi. Ko'rib chiqing va «Ma'lumotni yuklash» tugmasini bosing.",
+    couldNotReachQlik: "Qlik bilan bog'lanib bo'lmadi: {error}",
+    couldNotOpenChat: "Suhbatni ochib bo'lmadi: {error}",
+    couldNotStartChat: "Yangi suhbat boshlab bo'lmadi: {error}",
+    couldNotDeleteChat: "Suhbatni o'chirib bo'lmadi: {error}",
+    cloudModelConfirm: "Bu bulutli model. Maydon nomlari, namuna qiymatlar va so'rov natijalari shu kompyuterda qolmasdan Ollama serverlariga yuboriladi.\n\nDavom etilsinmi?",
+    qlikCacheNote: "Ilova fayliga saqlandi{stamp}. Qlik Sense Desktop bu ilova ochiq turgan oynada yangi varaqlarni ko'rsatmaydi — ilovani Qlik'da yopib, qaytadan oching. Avval Qlik'da «Saqlash» tugmasini bosmang: uning eski nusxasi buni o'chirib yuboradi.",
+  },
+};
+
+// The browser's own preference is a better first guess than English, and the
+// choice is remembered per machine afterwards.
+let lang = localStorage.getItem("qlik-ai-lang") || "";
+if (!STRINGS[lang]) {
+  const guess = (navigator.language || "en").slice(0, 2).toLowerCase();
+  lang = STRINGS[guess] ? guess : "en";
+}
+
+function t(key, vars) {
+  const table = STRINGS[lang] || STRINGS.en;
+  let text = table[key];
+  if (text === undefined) text = STRINGS.en[key];
+  if (text === undefined) return key;
+  if (typeof text !== "string") return text;
+  if (vars) {
+    text = text.replace(/\{(\w+)\}/g, (whole, name) =>
+      vars[name] === undefined ? whole : vars[name]);
+  }
+  return text;
+}
+
+// Everything painted from a template is re-rendered by its own function; this
+// covers the markup that is written once in the page itself.
+function applyLanguage() {
+  document.documentElement.lang = lang;
+  const set = (attribute, apply) =>
+    document.querySelectorAll("[" + attribute + "]").forEach(el =>
+      apply(el, t(el.getAttribute(attribute))));
+
+  set("data-i18n", (el, text) => { el.textContent = text; });
+  set("data-i18n-title", (el, text) => { el.title = text; });
+  set("data-i18n-ph", (el, text) => { el.placeholder = text; });
+  set("data-i18n-aria", (el, text) => { el.setAttribute("aria-label", text); });
+}
 
 function setStatus(text, kind) {
   const el = $("status");
@@ -633,7 +894,7 @@ function renderConnections(connections) {
   if (!connections.length) {
     const empty = document.createElement("div");
     empty.className = "empty";
-    empty.textContent = "None yet — ask the assistant to add a folder as a data source.";
+    empty.textContent = t("noConnections");
     box.appendChild(empty);
     return;
   }
@@ -654,7 +915,7 @@ function renderConnections(connections) {
 function renderChips() {
   const box = $("chips");
   box.innerHTML = "";
-  SUGGESTIONS.forEach(text => {
+  t("suggestions").forEach(text => {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.textContent = text;
@@ -668,17 +929,14 @@ function renderChips() {
 // open. Showing the file's timestamp makes it obvious the work was saved and
 // that Qlik is the one holding a stale copy.
 function noteQlikCache(file) {
-  const stamp = file && file.modified ? ` (saved ${file.modified})` : "";
+  const stamp = file && file.modified ? t("savedStamp", {when: file.modified}) : "";
   const note = document.createElement("div");
   note.className = "msg note";
-  note.innerHTML = '<div class="who">note</div>';
+  note.innerHTML = '<div class="who"></div>';
+  note.firstChild.textContent = t("note");
   const body = document.createElement("div");
   body.className = "body";
-  body.textContent =
-    `Saved to the app file${stamp}. Qlik Sense Desktop won't show new sheets ` +
-    `in a window that already had this app open — close the app in Qlik and ` +
-    `open it again. Don't press Save in Qlik first: its older copy would ` +
-    `overwrite this.`;
+  body.textContent = t("qlikCacheNote", {stamp});
   note.firstChild.appendChild(copyButton(() => body.textContent));
   note.appendChild(body);
   $("log").appendChild(note);
@@ -906,30 +1164,31 @@ function copyButton(getText) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "copy";
-  button.textContent = "Copy";
-  button.title = "Copy this message";
+  button.textContent = t("copy");
+  button.title = t("copyTitle");
   button.onclick = async () => {
     const ok = await copyText(getText());
-    button.textContent = ok ? "Copied ✓" : "Press Ctrl+C";
+    button.textContent = t(ok ? "copied" : "pressCtrlC");
     button.classList.toggle("done", ok);
     setTimeout(() => {
-      button.textContent = "Copy";
+      button.textContent = t("copy");
       button.classList.remove("done");
     }, 1400);
   };
   return button;
 }
 
-function addMessage(who, body) {
+function addMessage(role, body) {
+  const you = role === "user";
   const wrap = document.createElement("div");
-  wrap.className = "msg" + (who === "You" ? " you" : "");
+  wrap.className = "msg" + (you ? " you" : "");
   wrap.innerHTML = `<div class="who"></div>`;
-  wrap.firstChild.textContent = who;
+  wrap.firstChild.textContent = t(you ? "you" : "assistant");
   const text = document.createElement("div");
   text.className = "body";
   // Only the assistant writes markdown. What someone typed is shown back to
   // them exactly as typed, asterisks and all.
-  setBody(text, body, who !== "You");
+  setBody(text, body, !you);
   wrap.firstChild.appendChild(copyButton(() => bodyText(text)));
   wrap.appendChild(text);
   $("log").appendChild(wrap);
@@ -950,11 +1209,11 @@ function ago(iso) {
   if (!iso) return "";
   const seconds = (Date.now() - new Date(iso).getTime()) / 1000;
   if (!isFinite(seconds)) return "";
-  if (seconds < 60) return "just now";
-  if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
-  if (seconds < 86400) return Math.floor(seconds / 3600) + "h ago";
-  if (seconds < 604800) return Math.floor(seconds / 86400) + "d ago";
-  return new Date(iso).toLocaleDateString();
+  if (seconds < 60) return t("justNow");
+  if (seconds < 3600) return t("minutesAgo", {n: Math.floor(seconds / 60)});
+  if (seconds < 86400) return t("hoursAgo", {n: Math.floor(seconds / 3600)});
+  if (seconds < 604800) return t("daysAgo", {n: Math.floor(seconds / 86400)});
+  return new Date(iso).toLocaleDateString(lang);
 }
 
 function renderHistory(chats, activeId) {
@@ -965,7 +1224,7 @@ function renderHistory(chats, activeId) {
   if (!chats || !chats.length) {
     const empty = document.createElement("div");
     empty.className = "history-empty";
-    empty.textContent = "No saved chats yet — ask something and this one saves itself.";
+    empty.textContent = t("noChats");
     box.appendChild(empty);
     return;
   }
@@ -980,11 +1239,11 @@ function renderHistory(chats, activeId) {
     open.title = chat.title || "";
     const title = document.createElement("span");
     title.className = "t";
-    title.textContent = chat.title || "Untitled";
+    title.textContent = chat.title || t("untitled");
     const meta = document.createElement("span");
     meta.className = "m";
     meta.textContent = [
-      chat.turns + (chat.turns === 1 ? " turn" : " turns"),
+      chat.turns === 1 ? t("turnOne") : t("turns", {n: chat.turns}),
       chat.app,
       ago(chat.updated),
     ].filter(Boolean).join(" · ");
@@ -995,7 +1254,7 @@ function renderHistory(chats, activeId) {
     del.type = "button";
     del.className = "del";
     del.textContent = "×";
-    del.title = "Delete this chat";
+    del.title = t("deleteChatTitle");
     del.onclick = event => {
       event.stopPropagation();
       removeChat(chat.id, chat.title);
@@ -1011,7 +1270,7 @@ function renderHistory(chats, activeId) {
 function repaint(entries) {
   $("log").innerHTML = "";
   for (const entry of entries || []) {
-    addMessage(entry.role === "user" ? "You" : "Assistant", entry.content);
+    addMessage(entry.role, entry.content);
   }
   welcome();
   $("log").scrollTop = $("log").scrollHeight;
@@ -1036,7 +1295,7 @@ async function openChat(id) {
     // Reopening moves the chat you left up the list, so re-read the order.
     await refreshHistory();
   } catch (e) {
-    setStatus("Could not open that chat: " + e.message, "bad");
+    setStatus(t("couldNotOpenChat", {error: e.message}), "bad");
   }
 }
 
@@ -1047,12 +1306,12 @@ async function newChat() {
     renderHistory(result.chats, result.chat_id);
     $("chatInput").focus();
   } catch (e) {
-    setStatus("Could not start a new chat: " + e.message, "bad");
+    setStatus(t("couldNotStartChat", {error: e.message}), "bad");
   }
 }
 
 async function removeChat(id, title) {
-  if (!confirm(`Delete "${title || "this chat"}"? This cannot be undone.`)) return;
+  if (!confirm(t("deleteConfirm", {title: title || t("thisChat")}))) return;
   try {
     const wasOpen = id === chatId;
     const result = await api("/api/chats/" + encodeURIComponent(id), {method: "DELETE"});
@@ -1060,7 +1319,7 @@ async function removeChat(id, title) {
     if (wasOpen) repaint([]);
     renderHistory(result.chats, result.chat_id);
   } catch (e) {
-    setStatus("Could not delete that chat: " + e.message, "bad");
+    setStatus(t("couldNotDeleteChat", {error: e.message}), "bad");
   }
 }
 
@@ -1068,10 +1327,7 @@ $("btnNewChat").onclick = newChat;
 
 function welcome() {
   if (!$("log").children.length) {
-    addMessage("Assistant",
-      "Hi — I can load and clean data, write the load script, and build " +
-      "dashboards in this app. Describe what you want, or try one of the " +
-      "suggestions below.");
+    addMessage("assistant", t("welcome"));
   }
   // Centered input until a conversation exists, docked once it does. Keyed
   // on real user messages, not just log entries, so the welcome text alone
@@ -1106,7 +1362,7 @@ function renderOptions(options) {
 }
 
 async function select(change) {
-  setStatus("Switching…");
+  setStatus(t("switching"));
   try {
     await api("/api/select", {
       method: "POST",
@@ -1117,7 +1373,7 @@ async function select(change) {
     await load();
     setStatus("");
   } catch (e) {
-    setStatus("Could not switch: " + e.message, "bad");
+    setStatus(t("couldNotSwitch", {error: e.message}), "bad");
     await load();
   }
 }
@@ -1130,10 +1386,7 @@ $("appSel").onchange = event => {
 };
 $("modelSel").onchange = event => {
   const chosen = event.target.selectedOptions[0].textContent;
-  if (chosen.startsWith("☁") && !confirm(
-      "This is a cloud model. Field names, sample values and query results " +
-      "will be sent to Ollama's servers instead of staying on this machine.\n\n" +
-      "Continue?")) {
+  if (chosen.startsWith("☁") && !confirm(t("cloudModelConfirm"))) {
     load();
     return;
   }
@@ -1148,12 +1401,8 @@ async function load() {
   // Qlik works without Ollama; only the assistant needs it. Say which half
   // is down instead of looking broken.
   const ready = state.assistant_ready !== false;
-  $("chatInput").placeholder = ready
-    ? "Ask for anything: load the csvs in my downloads folder and merge them / build me a sales dashboard / what is total sales by market?"
-    : "Assistant unavailable - start Ollama, then just type here again.";
-  $("chatHint").textContent = ready
-    ? "One box for everything - loading, cleaning, dashboards, questions. The assistant writes the script; you press Load data to run it."
-    : "Ollama isn't running, so the assistant is off. Everything else - the editor, Load data, Save - still works.";
+  $("chatInput").placeholder = t(ready ? "askPlaceholder" : "askPlaceholderOffline");
+  $("chatHint").textContent = t(ready ? "hint" : "hintOffline");
   setScript(state.script);
   currentTab = currentTab || state.tabs[0] || null;
   renderTabs(state.tabs);
@@ -1172,7 +1421,7 @@ async function load() {
 }
 
 $("btnSave").onclick = async () => {
-  setStatus("Saving…");
+  setStatus(t("saving"));
   try {
     const result = await api("/api/script", {
       method: "PUT",
@@ -1182,15 +1431,15 @@ $("btnSave").onclick = async () => {
     renderTabs(result.tabs);
     const saved = await api("/api/save", {method: "POST"});
     const stamp = saved.file && saved.file.modified ? ` at ${saved.file.modified}` : "";
-    setStatus(`✓ Saved to the app file${stamp}. Press Load data to run it.`, "good");
+    setStatus(t("saved", {stamp}), "good");
   } catch (e) {
-    setStatus("Not saved: " + e.message, "bad");
+    setStatus(t("notSaved", {error: e.message}), "bad");
   }
 };
 
 $("btnReload").onclick = async () => {
-  if (!confirm("Load data replaces every row currently in this app. Continue?")) return;
-  setStatus("Loading data… this can take a while for a large source.");
+  if (!confirm(t("loadConfirm"))) return;
+  setStatus(t("loadingData"));
   const btn = $("btnReload");
   btn.disabled = true;
   btn.classList.add("busy");
@@ -1205,13 +1454,13 @@ $("btnReload").onclick = async () => {
     if (result.success) {
       const tables = (result.tables || [])
         .map(t => `${t.name}: ${t.rows.toLocaleString()} rows`).join("\n");
-      setStatus(`✓ Loaded ${(result.total_rows || 0).toLocaleString()} rows.\n${tables}`, "good");
+      setStatus(t("loadedRows", {rows: (result.total_rows || 0).toLocaleString(), tables}), "good");
       await api("/api/save", {method: "POST"});
     } else {
-      setStatus("Load failed:\n" + (result.errors || []).join("\n"), "bad");
+      setStatus(t("loadFailed", {error: (result.errors || []).join("\n")}), "bad");
     }
   } catch (e) {
-    setStatus("Load failed: " + e.message, "bad");
+    setStatus(t("loadFailed", {error: e.message}), "bad");
   } finally {
     btn.disabled = false;
     btn.classList.remove("busy");
@@ -1230,11 +1479,12 @@ function typingDots() {
 // request, and waiting in silence for it is indistinguishable from a hang.
 async function ask(question) {
   $("chat").classList.remove("empty");
-  addMessage("You", question);
+  addMessage("user", question);
 
   const wrap = document.createElement("div");
   wrap.className = "msg";
-  wrap.innerHTML = '<div class="who">Assistant</div>';
+  wrap.innerHTML = '<div class="who"></div>';
+  wrap.firstChild.textContent = t("assistant");
   const acts = document.createElement("div");
   acts.className = "acts";
   const body = document.createElement("div");
@@ -1308,7 +1558,7 @@ async function ask(question) {
           if (event.script_changed) {
             setScript(event.script);
             renderTabs(event.tabs);
-            setStatus("The assistant changed the script. Review it, then press Load data.", "good");
+            setStatus(t("scriptChanged"), "good");
           }
           if (event.sheets_changed) noteQlikCache(event.file);
         }
@@ -1415,7 +1665,35 @@ draggable($("dragChat"), "chat", ev => Math.min(
   Math.round(window.innerHeight * 0.92)
 ));
 
-load().catch(e => setStatus("Could not reach Qlik: " + e.message, "bad"));
+LANGUAGES.forEach(([code, name]) => {
+  const option = document.createElement("option");
+  option.value = code;
+  option.textContent = name;
+  $("langSel").appendChild(option);
+});
+$("langSel").value = lang;
+
+$("langSel").onchange = event => {
+  lang = event.target.value;
+  localStorage.setItem("qlik-ai-lang", lang);
+  applyLanguage();
+  pinLanguage();
+  // load() repaints the parts built from templates - chips, the hint, the
+  // placeholder, the history list - which applyLanguage() cannot reach.
+  load().catch(e => setStatus(t("couldNotReachQlik", {error: e.message}), "bad"));
+};
+
+// The assistant answers in whatever the question was written in unless it is
+// told otherwise; this is the telling. Failing to reach the server costs the
+// assistant's language, not the interface's, so it is not fatal.
+function pinLanguage() {
+  api("/api/select", {method: "POST", body: JSON.stringify({language: lang})})
+    .catch(e => console.warn("Could not pin the assistant's language:", e));
+}
+
+applyLanguage();
+pinLanguage();
+load().catch(e => setStatus(t("couldNotReachQlik", {error: e.message}), "bad"));
 </script>
 </body>
 </html>

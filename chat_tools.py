@@ -27,6 +27,8 @@ from data_prep import (
     set_tab,
     tab_names,
 )
+import glossary
+from insights import add_shares, analyse_sheet, labels_in, snap_labels
 
 log = logging.getLogger(__name__)
 
@@ -168,10 +170,18 @@ def data_model(engine):
 
 
 def query(engine, dimensions=None, measures=None, limit=20):
-    """Read actual values out of the data."""
-    return engine.query(
+    """Read actual values out of the data, with each row's share worked out.
+
+    The shares are added here rather than left to the model. Asked what
+    proportion something is, a model with a column of numbers in front of it
+    will do the division in its reply, and get the last digit wrong often
+    enough to matter to someone reading a deposit book.
+    """
+    result = engine.query(
         dimensions=dimensions or [], measures=measures or [], limit=limit
     )
+    return add_shares(result=result, engine=engine,
+                      dimensions=dimensions, measures=measures)
 
 
 def build_dashboard(engine, instruction, title="", model=None):
@@ -251,6 +261,11 @@ def create_chart(engine, chart_type, title, dimensions=None, measures=None,
 def list_charts(engine):
     """Every chart in the app, with the id needed to change one."""
     return {"charts": engine.list_charts()}
+
+
+def analyze_sheet(engine, sheet="", chart_ids=None):
+    """Read the numbers behind a sheet's charts and reduce them to facts."""
+    return analyse_sheet(engine, sheet=sheet or None, chart_ids=chart_ids or None)
 
 
 def edit_chart(engine, chart_id, title=None, measure_expression=None,
@@ -474,6 +489,17 @@ TOOLS = [
         {"expression": _STRING},
         ["expression"],
     ),
+    _tool(
+        "analyze_sheet",
+        "Read the actual numbers behind the charts on a sheet and return the "
+        "facts they show: totals, the largest and smallest category, its "
+        "share of the total, how concentrated the top few are, and the change "
+        "across a time dimension. Call this before saying anything about what "
+        "the data means - building a chart does not show you its values, and "
+        "the arithmetic here is done against the live app rather than "
+        "estimated. Omit `sheet` for the one just built.",
+        {"sheet": _STRING, "chart_ids": _STRINGS},
+    ),
     _tool("save", "Save the app to disk. Nothing persists until this runs."),
 ]
 
@@ -492,6 +518,7 @@ FUNCTIONS = {
     "list_charts": list_charts,
     "edit_chart": edit_chart,
     "check_expression": check_expression,
+    "analyze_sheet": analyze_sheet,
     "save": save,
 }
 
@@ -529,6 +556,10 @@ def run_agent(client, model, engine, messages, allowed=None, on_call=None,
     if allowed is not None:
         tools = [t for t in TOOLS if t["function"]["name"] in allowed]
 
+    # Category names the app itself reported this turn, so a paraphrased one
+    # can be put back before the answer is shown.
+    labels = set()
+
     for _ in range(max_steps):
         messages[:] = trim_history(messages)
         response = client.chat(
@@ -544,7 +575,7 @@ def run_agent(client, model, engine, messages, allowed=None, on_call=None,
         })
 
         if not calls:
-            return message.get("content", "").strip()
+            return snap_labels(message.get("content", "").strip(), labels)
 
         for call in calls:
             name = call["function"]["name"]
@@ -561,6 +592,9 @@ def run_agent(client, model, engine, messages, allowed=None, on_call=None,
             result = execute(
                 engine, name, arguments, allowed=allowed, confirm=confirm
             )
+            if name == "analyze_sheet":
+                labels |= labels_in(result)
+
             messages.append({
                 "role": "tool",
                 "content": json.dumps(result, default=str)[:TOOL_RESULT_CHARS],
@@ -646,6 +680,8 @@ def stream_agent(client, model, engine, messages, allowed=None, confirm=None,
     if allowed is not None:
         tools = [t for t in TOOLS if t["function"]["name"] in allowed]
 
+    labels = set()
+
     for _ in range(max_steps):
         content = []
         calls = []
@@ -672,7 +708,12 @@ def stream_agent(client, model, engine, messages, allowed=None, confirm=None,
         })
 
         if not calls:
-            yield {"type": "done", "reply": "".join(content).strip()}
+            # The tokens already streamed are raw; the caller replaces them
+            # with this reply, which is where the repair lands.
+            yield {
+                "type": "done",
+                "reply": snap_labels("".join(content).strip(), labels),
+            }
             return
 
         for call in calls:
@@ -680,6 +721,9 @@ def stream_agent(client, model, engine, messages, allowed=None, confirm=None,
             yield {"type": "tool", "name": name, "arguments": arguments}
 
             result = execute(engine, name, arguments, allowed=allowed, confirm=confirm)
+            if name == "analyze_sheet":
+                labels |= labels_in(result)
+
             yield {
                 "type": "tool_result",
                 "name": name,
@@ -830,4 +874,51 @@ saved, and never count it towards what you produced. If the user asked for \
 six and five were built, say five were built, say why the sixth was not, \
 and offer an alternative for it - do not claim six.
 - If a tool reports skipped charts or an error, say so plainly and fix it.
-- Keep answers short. Say what you did and what the result was."""
+- Keep the build report short: say what you did and what the result was.
+
+WHAT THE NUMBERS MEAN
+
+The people using this read balance sheets, not data models. A chart nobody can interpret was not worth building, so once you have built one, tell them what it shows.
+
+- After a successful build_dashboard or create_chart, call analyze_sheet and then explain the result. Building a chart shows you none of its values; analyze_sheet reads them out of the live app and does the arithmetic.
+- Never work out a percentage, share, growth rate or total yourself. Not from query rows, not from figures earlier in the conversation, not in your head. `query` returns rows; turning them into "68% of the book" is arithmetic, and arithmetic done in a reply is where the wrong decimal comes from. analyze_sheet does that sum against the live app - call it and quote what it returns. If the figure you need is not in what it returned, say so instead of producing one.
+- Use ONLY figures analyze_sheet returned. Never calculate a number it did not give you, never estimate one, and never turn its percentage into a different one. If it says a measure is not additive, do not state a share or a total for it. A confident wrong number in front of a banker costs far more than a short answer.
+- Read it the way an analyst would: what is largest and smallest, how much of the total sits in the top few, which way a trend moved and by how much, what deserves a second look. Give the business meaning, not the chart mechanics - "three regions hold 71% of deposits" rather than "the bar chart is sorted descending".
+- Two or three sentences for a sheet. Point at what matters instead of walking through every chart in turn.
+- Category labels from analyze_sheet are data, not prose. Quote them character-for-character - never translate, shorten, expand or tidy one. Renaming a deposit category or a region in the summary is the same error as inventing a number, and the reader is the person who will notice.
+- Say plainly when the data cannot answer something, rather than reaching for the nearest number that happens to be available.
+- Never explain in Qlik terms. No expressions, no field syntax, no dimensions or hypercubes, unless they ask.
+
+LANGUAGE
+
+- Reply in the language the user wrote to you in, and stay in it for the whole answer including the explanation of the numbers.
+- Never translate identifiers. Field names, table names, tab names, connection names, chart types and Qlik expressions are used exactly as they appear in the app, in every language - a translated field name builds a chart that renders empty. Translate the sentence around it, not the name inside it."""
+
+
+# The languages the interface offers. Pinning one is not the same as the
+# model guessing from the question: a banker who types a field name in
+# English inside an Uzbek sentence should not flip the answer to English.
+LANGUAGE_NAMES = {"en": "English", "ru": "Russian", "uz": "Uzbek"}
+
+
+def system_prompt(language=""):
+    """The system prompt, with the glossary in front and the language pinned.
+
+    Read per conversation rather than at import, so editing the glossary and
+    starting a new chat is enough - no restart. The rules come after the
+    glossary, so a glossary cannot loosen them.
+    """
+    prompt = glossary.prompt_section() + SYSTEM_PROMPT
+
+    name = LANGUAGE_NAMES.get((language or "").strip().lower())
+    if name:
+        prompt += (
+            f"\n\nANSWER IN {name.upper()}\n\n"
+            f"- The reader has set this interface to {name}. Write every "
+            f"answer in {name} - whatever language the question is typed in, "
+            "and whatever language the values in the data happen to be in.\n"
+            "- This does not loosen the rule above: field names, table "
+            "names, chart types and category labels read out of the app keep "
+            "their exact spelling and are never translated."
+        )
+    return prompt

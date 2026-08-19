@@ -13,7 +13,7 @@ import threading
 import ollama
 
 import history
-from chat_tools import SYSTEM_PROMPT
+from chat_tools import system_prompt
 from config import APP_NAME, CHAT_MODEL, OLLAMA_HOST
 from ollama_client import OllamaError, pick_tool_model
 from qlik_engine import QlikEngine, QlikNotConnectedError
@@ -41,11 +41,33 @@ _state = {
     # off, "load my data and chart it" stalls halfway and the model reports
     # that reloading is impossible rather than that it needs a click.
     "allow_reload": True,
+    # Which language the assistant answers in. "" lets it follow whatever
+    # the question was written in, which is the right default until someone
+    # says otherwise.
+    "language": "",
 }
 
 
 def allow_reload():
     return _state["allow_reload"]
+
+
+def language():
+    return _state["language"]
+
+
+def set_language(code):
+    """Pin the assistant's language, including for the conversation open now.
+
+    The system prompt is written once when a conversation starts, so without
+    rewriting it here the setting would not take effect until the next chat -
+    which reads as the switch being broken.
+    """
+    with _lock:
+        _state["language"] = (code or "").strip().lower()
+        messages_ = _state["messages"]
+        if messages_ and messages_[0].get("role") == "system":
+            messages_[0]["content"] = system_prompt(_state["language"])
 
 
 def set_allow_reload(value):
@@ -214,7 +236,7 @@ def reset_chat():
         if _state["chat_id"] is not None:
             persist()
         _state["chat_id"] = history.new_id()
-        _state["messages"] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        _state["messages"] = [{"role": "system", "content": system_prompt(_state["language"])}]
     return _state["messages"]
 
 
@@ -236,7 +258,7 @@ def load_chat(chat_id_):
         # A history file written before the prompt changed - or hand-edited -
         # still has to start with the rules the tools are described by.
         if not messages_ or messages_[0].get("role") != "system":
-            messages_ = [{"role": "system", "content": SYSTEM_PROMPT}] + messages_
+            messages_ = [{"role": "system", "content": system_prompt(_state["language"])}] + messages_
         _state["messages"] = messages_
         _state["chat_id"] = chat_id_
     return record
@@ -248,5 +270,5 @@ def delete_chat(chat_id_):
         history.delete(chat_id_)
         if _state["chat_id"] == chat_id_:
             _state["chat_id"] = history.new_id()
-            _state["messages"] = [{"role": "system", "content": SYSTEM_PROMPT}]
+            _state["messages"] = [{"role": "system", "content": system_prompt(_state["language"])}]
     return True

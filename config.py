@@ -143,6 +143,16 @@ HISTORY_DIR = _str_env(
 HISTORY_MAX = _int_env("HISTORY_MAX", 200)
 
 
+# ----------------------------------------------------------------------
+# Glossary
+# ----------------------------------------------------------------------
+
+# The institution's own definitions - fiscal year, what a ratio is made of -
+# read at the start of every conversation. Absent by default: most installs
+# never write one.
+GLOSSARY_FILE = _str_env("GLOSSARY_FILE", "glossary.md")
+
+
 def summary():
     """Human-readable settings dump for smoke tests and error messages.
 
