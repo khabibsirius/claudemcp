@@ -79,6 +79,13 @@ Rules:
 - Do NOT use "scatterplot", "sn-grid-chart", "mekkochart" or
   "qlik-sankey-chart-ext" here: they need two measures or two dimensions,
   and this schema carries one of each.
+- The chart TITLES are read by a business person, not an analyst. Title a
+  chart "Deposits by branch", never "Sum(SUM) by BRANCH" and never the raw
+  field name. If a field is cryptic, use the "samples" values to work out
+  what it really holds and title it accordingly.
+- If the user's instruction names a chart type, a field, or a comparison,
+  honour it exactly and build the rest of the dashboard around it. Their
+  words override your own judgement about what would look good.
 - Leave "color" out unless the user asked about colours. If they name
   colours ("make them red and blue"), set "color" per chart to work through
   the colours they listed. If they ask for something colourful or varied,
@@ -102,6 +109,10 @@ Rules:
     }}
   ]
 }}
+
+Output the JSON object and nothing else. No explanation before it, no
+markdown fences around it, no trailing commentary. The first character you
+emit must be {{ and the last must be }}.
 """
 
 

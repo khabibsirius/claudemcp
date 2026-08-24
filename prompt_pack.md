@@ -1,868 +1,93 @@
-"""The actions the chatbot can take, and their schemas for the local model.
-
-This is the whole capability surface: data connections, the load script,
-reloading, reading data, and building sheets. The MCP server deliberately
-exposes only a small part of this - the rest is meant to be reached by
-talking to the chatbot rather than by calling tools by hand.
-
-Each entry is (schema for the model, python function). Functions take the
-engine plus keyword arguments and return something JSON-serialisable.
-"""
-
-import json
-import logging
-from collections import Counter
-
-from chart_specs import (
-    CHART_TYPES,
-    DIMENSIONAL_TYPES,
-    chart_requirements,
-    describe_chart_types,
-    resolve_chart_type,
-)
-from config import CHAT_HISTORY_CHARS, CHAT_MAX_STEPS, OLLAMA_NUM_CTX
-from qlik_engine import QlikNotFoundError
-from dashboard_builder import build_sheet as _build_sheet
-from dashboard_builder import design_full_dashboard, enrich_fields
-from data_prep import (
-    GENERATED_TAB,
-    append_to_tab,
-    delete_tab,
-    describe_data_model,
-    generate_load_script,
-    get_tab,
-    set_tab,
-    tab_names,
-)
-
-log = logging.getLogger(__name__)
-
-# Reloading rebuilds the data model, and replacing the whole script throws
-# away hand-written work. The chat loop asks before running these.
-DESTRUCTIVE = {"reload_data"}
-
-# What the web editor lets the model touch. Reloading is deliberately absent:
-# there it is a button the person presses, exactly as in Qlik's own editor.
-LOAD_EDITOR_TOOLS = {
-    "data_sources", "add_data_source", "read_script",
-    "build_load_script", "write_script", "data_model", "query",
-}
-
-DATA_FILE_SUFFIXES = (
-    ".csv", ".txt", ".tab", ".qvd", ".xlsx", ".xls", ".json", ".xml", ".parquet",
-)
-
-
-# ----------------------------------------------------------------------
-# Actions
-# ----------------------------------------------------------------------
-
-def open_app(engine, app=""):
-    """Open an app, or list them when no name is given."""
-    if not app:
-        return {"apps": [a["name"] for a in engine.list_apps()]}
-
-    engine.open_app(app)
-    fields = engine.get_fields()
-    return {
-        "app": app,
-        "fields": len(fields),
-        "sheets": [s["title"] for s in engine.list_sheets()],
-        "has_data": bool(fields),
-    }
-
-
-def data_sources(engine, connection="", path=""):
-    """Connections, then folder contents, then a file's columns and rows."""
-    if not connection:
-        return {"connections": engine.list_connections()}
-
-    if path and path.lower().endswith(DATA_FILE_SUFFIXES):
-        preview = engine.preview_file(connection, path, sample_rows=5)
-        preview["lib_path"] = f"lib://{connection}/{path.lstrip('/')}"
-        return preview
-
-    return {
-        "connection": connection,
-        "path": path,
-        "items": engine.browse_connection(connection, path),
-    }
-
-
-def add_data_source(engine, name, folder_path):
-    """Register a folder so its files can be loaded."""
-    return engine.create_connection(name, folder_path)
-
-
-def read_script(engine, tab=""):
-    """The load script, or one tab of it."""
-    script = engine.get_script()
-    names = tab_names(script)
-
-    if tab:
-        body = get_tab(script, tab)
-        if body is None:
-            return {"error": f"No tab {tab!r}. Tabs: {', '.join(names)}"}
-        return {"tabs": names, "tab": tab, "content": body}
-
-    return {"tabs": names, "content": script}
-
-
-def write_script(engine, content="", tab=GENERATED_TAB, mode="replace_tab"):
-    """Write the load script. Syntax-checked; rolled back if it won't parse."""
-    current = engine.get_script()
-
-    if mode == "replace_tab":
-        updated = set_tab(current, content, tab_name=tab)
-    elif mode == "append":
-        updated = append_to_tab(current, content, tab_name=tab)
-    elif mode == "replace_all":
-        updated = content
-    elif mode == "delete_tab":
-        updated = delete_tab(current, tab)
-    else:
-        return {"error": f"mode must be replace_tab, append, replace_all or delete_tab"}
-
-    engine.set_script(updated)
-    return {"ok": True, "tabs": tab_names(updated), "note": "Not reloaded yet."}
-
-
-def build_load_script(engine, sources, mode="separate", drop_fields=None,
-                      trim_text=True, null_tokens=None, table_name="",
-                      derived=None):
-    """Generate a clean LOAD script for one or more files."""
-    previewed = []
-    for source in sources or []:
-        # Sample rows are what stop a numeric column being wrapped in Trim()
-        # and silently turned into text.
-        preview = engine.preview_file(source["connection"], source["path"], sample_rows=20)
-        for table in preview["tables"]:
-            previewed.append({
-                "connection": source["connection"],
-                "path": source["path"],
-                "table": source.get("table") or table["name"],
-                # The name INSIDE the file (an Excel sheet), which the FROM
-                # clause's format spec needs - distinct from "table", the
-                # name the load gives the result.
-                "file_table": table["name"],
-                "columns": table["columns"],
-                "sample_rows": table.get("sample_rows", []),
-            })
-
-    if not previewed:
-        return {"error": "No readable tables in those sources."}
-
-    return generate_load_script(
-        previewed, mode=mode, drop_fields=drop_fields or (),
-        trim_text=trim_text, null_tokens=null_tokens or (),
-        table_name=table_name or None, derived=derived or (),
-    )
-
-
-def reload_data(engine):
-    """Run the load script, rebuilding the app's data."""
-    result = engine.reload_data()
-    if result.get("success"):
-        result["tables"] = [
-            {"name": t["name"], "rows": t["rows"]} for t in engine.get_tables()
-        ]
-    return result
-
-
-def data_model(engine):
-    """Tables, fields, distinct counts, nulls, and quality problems."""
-    return describe_data_model(engine)
-
-
-def query(engine, dimensions=None, measures=None, limit=20):
-    """Read actual values out of the data."""
-    return engine.query(
-        dimensions=dimensions or [], measures=measures or [], limit=limit
-    )
-
-
-def build_dashboard(engine, instruction, title="", model=None):
-    """Design a sheet from a plain-language brief and build it.
-
-    Deliberately not "here is a list of charts, build them": a small local
-    model asked to emit chart specs mid-conversation produces worse
-    dashboards than the dedicated design prompt does, which sees the whole
-    field list with distinct counts and real sample values. So the model
-    passes the brief through and the tuned pipeline does the designing.
-    """
-    fields = engine.get_fields()
-    if not fields:
-        return {"error": "No data is loaded in this app. Load data first."}
-
-    if model is None:
-        # The one model the whole session is using. Designing with a
-        # different one would pull a second model into memory alongside the
-        # one already loaded - which on a machine also running Qlik is the
-        # difference between working and swapping.
-        import session
-
-        model = session.ensure_model()
-
-    enrich_fields(engine, fields)
-    spec = design_full_dashboard(
-        fields, model=model, instruction=instruction or title or None, engine=engine
-    )
-
-    result = _build_sheet(
-        engine, title or spec["dashboard_title"], spec["visualizations"], fields=fields
-    )
-    if result["built"]:
-        engine.save()
-        result["saved"] = True
-    return result
-
-
-def _chart_problem(engine, chart_type, title, dimensions, measures):
-    """Why this chart would render blank, or None if it will draw.
-
-    build_dashboard validates every chart it designs; create_chart used to
-    validate nothing at all and report {"created": ...} regardless. A model
-    that asks for a pie chart and forgets the measure was told it had
-    succeeded, so it said so to the user, and the app grew a chart that
-    renders nothing. An empty chart nobody knows is empty is the worst
-    outcome available here - worse than a refusal, because it is discovered
-    weeks later by whoever is relying on it.
-
-    Everything checked here is checked BEFORE anything is created, and the
-    reason comes back as an error the model can act on, which is what lets
-    it correct itself inside the same turn.
-    """
-    resolved = resolve_chart_type(chart_type)
-    if resolved is None:
-        return (
-            f"{chart_type!r} is not a chart type. Use one of: "
-            f"{', '.join(CHART_TYPES)}."
-        )
-
-    if not (title or "").strip():
-        return "every chart needs a title - it is what the user reads first."
-
-    dimensions = [d for d in (dimensions or []) if str(d).strip()]
-    measures = [m for m in (measures or []) if str(m).strip()]
-
-    (min_dims, max_dims), (min_meas, max_meas) = chart_requirements(resolved)
-
-    # Qlik permits a bar chart with no dimension - it draws a single bar.
-    # Allowed is not the same as useful, so the classic types still require
-    # one, exactly as validate_visualization does for designed dashboards.
-    if (min_dims or resolved in DIMENSIONAL_TYPES) and not dimensions:
-        return (
-            f"{resolved} needs a dimension to group by and none was given. "
-            f"Without one it draws a single undifferentiated bar rather than "
-            f"the breakdown the user asked for."
-        )
-
-    if len(dimensions) < min_dims:
-        return (
-            f"{resolved} needs at least {min_dims} dimension(s) to group by "
-            f"and you gave {len(dimensions)}. Without it the chart renders "
-            f"blank."
-        )
-    if len(dimensions) > max_dims:
-        return (
-            f"{resolved} takes at most {max_dims} dimension(s) and you gave "
-            f"{len(dimensions)}."
-        )
-    if len(measures) < min_meas:
-        return (
-            f"{resolved} needs at least {min_meas} measure(s) - an expression "
-            f"such as Sum([Field]) - and you gave {len(measures)}. Without "
-            f"one there is nothing to plot and the chart renders blank."
-        )
-    if len(measures) > max_meas:
-        return (
-            f"{resolved} takes at most {max_meas} measure(s) and you gave "
-            f"{len(measures)}."
-        )
-
-    # The shape checks above need nothing but the chart type, so they hold
-    # even when the engine cannot be consulted. The two below ask the app
-    # questions, and a chart is not worth refusing because the lookup itself
-    # failed - so they are best-effort, exactly as validate_visualization
-    # skips its field checks when it is given no field list.
-
-    # A misspelled dimension is the other way a chart comes out empty.
-    try:
-        known = {f["name"] for f in engine.get_fields()}
-    except Exception:  # no app open, or an engine that cannot be asked
-        known = None
-    if known:
-        unknown = [d for d in dimensions if d not in known]
-        if unknown:
-            return (
-                f"these are not fields in this app: "
-                f"{', '.join(map(repr, unknown))}. Check the spelling against "
-                f"data_model - the app has: {', '.join(sorted(known))}."
-            )
-
-    # Qlik judges the expressions, so set analysis and Aggr stay available.
-    for measure in measures:
-        try:
-            verdict = engine.check_expression(measure)
-        except Exception:
-            continue
-        if not verdict.get("valid"):
-            reason = verdict.get("error") or "invalid expression"
-            bad = verdict.get("bad_fields") or []
-            extra = f" Unknown field(s): {', '.join(bad)}." if bad else ""
-            return f"the measure {measure!r} is not valid: {reason}.{extra}"
-
-    return None
-
-
-def create_chart(engine, chart_type, title, dimensions=None, measures=None,
-                 sheet_title=None, color=None, limit=None):
-    """Create one chart, with as many dimensions and measures as it needs.
-
-    build_dashboard designs a whole sheet but carries one dimension and one
-    measure per chart, so the types that need more - sankey, scatter, mekko,
-    a combo chart with two measures - cannot be expressed through it at all.
-    This is the way to build those.
-
-    Refuses anything that would render blank; see _chart_problem.
-    """
-    problem = _chart_problem(engine, chart_type, title, dimensions, measures)
-    if problem:
-        # Nothing is created. Named "error" so the model treats it as a
-        # correction to act on rather than a result to report.
-        return {
-            "error": f"Not created - it would render blank: {problem}",
-            "created": False,
-        }
-
-    # A sheet name that already exists means "put it there", not "make
-    # another one with the same name" - which is what it used to do, leaving
-    # duplicate sheets and the chart nowhere the person was looking.
-    if sheet_title:
-        try:
-            engine.open_sheet(sheet_title)
-        except QlikNotFoundError:
-            # Only when it genuinely isn't there. An ambiguous name must
-            # propagate: creating another sheet with the same title makes
-            # the ambiguity worse every time.
-            engine.create_sheet(sheet_title)
-    elif engine.sheet_handle is None:
-        engine.create_sheet(title)
-
-    engine.create_chart(
-        chart_type, title,
-        dimensions=list(dimensions or []),
-        measure_expressions=list(measures or []),
-        colour=color, limit=limit,
-    )
-    engine.save()
-
-    return {
-        "created": {"type": chart_type, "title": title},
-        "sheet": sheet_title or engine.sheet_id,
-        "saved": True,
-    }
-
-
-def list_charts(engine):
-    """Every chart in the app, with the id needed to change one.
-
-    Reports the sheets separately rather than leaving them implied by the
-    charts: a sheet with nothing on it owns no charts, so it is invisible in
-    that list, and "you have 3 sheets" is then wrong in a way nothing in the
-    conversation can correct. An empty sheet is also exactly the kind of
-    thing the person asking wants to be told about.
-    """
-    charts = engine.list_charts()
-    counts = Counter(chart.get("sheet") for chart in charts)
-    return {
-        "charts": charts,
-        "sheets": [
-            {"title": sheet["title"], "charts": counts.get(sheet["title"], 0)}
-            for sheet in engine.list_sheets()
-        ],
-    }
-
-
-def edit_chart(engine, chart_id, title=None, measure_expression=None,
-               measure_label=None, dimension=None, color=None, limit=None):
-    """Change an existing chart in place."""
-    result = engine.update_chart(
-        chart_id, title=title, measure_expression=measure_expression,
-        measure_label=measure_label, dimension=dimension,
-        colour=color, limit=limit,
-    )
-    if result.get("changed"):
-        engine.save()
-        result["saved"] = True
-    return result
-
-
-def check_expression(engine, expression):
-    """Ask Qlik whether an expression is valid, without building anything."""
-    return engine.check_expression(expression)
-
-
-def save(engine):
-    """Persist the app to disk."""
-    engine.save()
-    return {"saved": True}
-
-
-# ----------------------------------------------------------------------
-# Schemas handed to the model
-# ----------------------------------------------------------------------
-
-def _tool(name, description, properties=None, required=None):
-    return {
-        "type": "function",
-        "function": {
-            "name": name,
-            "description": description,
-            "parameters": {
-                "type": "object",
-                "properties": properties or {},
-                "required": required or [],
-            },
-        },
-    }
-
-
-_STRING = {"type": "string"}
-_STRINGS = {"type": "array", "items": {"type": "string"}}
-
-TOOLS = [
-    _tool(
-        "open_app",
-        "Open a Qlik app by name. Call with no arguments to list available apps.",
-        {"app": _STRING},
-    ),
-    _tool(
-        "data_sources",
-        "Find data. No arguments lists data connections. A connection name "
-        "lists its files. A connection plus a data file path returns that "
-        "file's real column names and a few sample rows, without loading it. "
-        "Always do this before writing a LOAD statement.",
-        {"connection": _STRING, "path": _STRING},
-    ),
-    _tool(
-        "add_data_source",
-        "Register a folder on disk as a data connection so its files can be "
-        "loaded, e.g. the user's Downloads folder. Needed before loading from "
-        "any folder not already listed by data_sources.",
-        {"name": _STRING, "folder_path": _STRING},
-        ["name", "folder_path"],
-    ),
-    _tool(
-        "read_script",
-        "Read the app's load script, or one named tab of it. Always read "
-        "before writing so existing work is not overwritten.",
-        {"tab": _STRING},
-    ),
-    _tool(
-        "build_load_script",
-        "Generate a clean LOAD script for one or more files. Each source is "
-        "{connection, path}. mode 'concatenate' merges the files into one "
-        "table; 'separate' keeps one table per file. drop_fields removes "
-        "columns; null_tokens turns placeholders like 'N/A' into real nulls. "
-        "\n\n"
-        "USE `derived` TO ADD NEW COLUMNS. Each entry is {name, expression} "
-        "where expression is Qlik script, e.g. "
-        "{\"name\": \"Year\", \"expression\": \"Year([Report Date])\"} or "
-        "{\"name\": \"HighDeposit\", \"expression\": \"If([SUM] > 100, 1, 0)\"}. "
-        "This is how a calculated field is created - you never need to write "
-        "a LOAD statement by hand to add one. The result is syntax-checked "
-        "before it is applied, so a wrong expression is reported rather than "
-        "breaking the app.\n\n"
-        "Returns the script - it does not apply it.",
-        {
-            "sources": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {"connection": _STRING, "path": _STRING, "table": _STRING},
-                    "required": ["connection", "path"],
-                },
-            },
-            "mode": {"type": "string", "enum": ["separate", "concatenate"]},
-            "drop_fields": _STRINGS,
-            "null_tokens": _STRINGS,
-            "table_name": _STRING,
-            "derived": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {"name": _STRING, "expression": _STRING},
-                    "required": ["name", "expression"],
-                },
-            },
-        },
-        ["sources"],
-    ),
-    _tool(
-        "write_script",
-        "Write the load script. mode 'replace_tab' (default) rewrites one tab "
-        "and leaves the others alone; 'append' adds to a tab; 'replace_all' "
-        "overwrites everything; 'delete_tab' removes a tab. The script is "
-        "syntax-checked and rolled back if it does not parse. Does not reload.",
-        {
-            "content": _STRING,
-            "tab": _STRING,
-            "mode": {
-                "type": "string",
-                "enum": ["replace_tab", "append", "replace_all", "delete_tab"],
-            },
-        },
-    ),
-    _tool(
-        "reload_data",
-        "Run the load script and rebuild the app's data from its sources. "
-        "Destructive: the current data is replaced. Returns the resulting "
-        "tables and row counts, or the engine's errors if it failed.",
-    ),
-    _tool(
-        "data_model",
-        "What data is loaded: tables, row counts, and every field with its "
-        "distinct-value count and null count, plus quality problems such as "
-        "constant or mostly-empty columns. Read this before building charts.",
-    ),
-    _tool(
-        "query",
-        "Read actual values. dimensions=['Region'], measures=['Sum([Sales])'] "
-        "returns each region with its total, sorted descending, so a small "
-        "limit gives a real top-N. Measures alone return a single number.",
-        {"dimensions": _STRINGS, "measures": _STRINGS, "limit": {"type": "integer"}},
-    ),
-    _tool(
-        "build_dashboard",
-        "Build a sheet of charts and save it. Any chart type in AVAILABLE CHART "
-        "TYPES can be used - say which you want in the instruction, e.g. "
-        "\"a gauge of total sales and a treemap by region\". Pass the user's "
-        "request through "
-        "as `instruction`, in their own words - including any number of "
-        "charts they asked for and any fields they named. The charts are "
-        "designed from the app's real data, validated, and anything that "
-        "would render blank is skipped. Do not try to specify the charts "
-        "yourself; describe what is wanted and let this design it.",
-        {"instruction": _STRING, "title": _STRING},
-        ["instruction"],
-    ),
-    _tool(
-        "create_chart",
-        "Create ONE chart with as many dimensions and measures as it needs, "
-        "and save it. This is the only way to build the types that take more "
-        "than one of either - sankey (2-5 dimensions), scatter (2-3 "
-        "measures), mekko and grid (2 dimensions), a combo chart with two "
-        "measures. build_dashboard cannot express those: it carries one "
-        "dimension and one measure per chart. dimensions are exact field "
-        "names, in flow order for a sankey. measures are Qlik expressions "
-        "such as Sum([SUM]). Give sheet_title to start a new sheet, or omit "
-        "it to add to the current one. Check AVAILABLE CHART TYPES for what "
-        "each type needs.",
-        {
-            "chart_type": _STRING,
-            "title": _STRING,
-            "dimensions": _STRINGS,
-            "measures": _STRINGS,
-            "sheet_title": _STRING,
-            "color": _STRING,
-            "limit": {"type": "integer"},
-        },
-        ["chart_type", "title"],
-    ),
-    _tool(
-        "list_charts",
-        "Every chart in the app with its id, type, title, dimensions and "
-        "measure expressions, plus every sheet with how many charts is on "
-        "it. Use the \"sheets\" list for sheet counts, not the charts: a "
-        "sheet with nothing on it appears there with 0 charts and is worth "
-        "telling the user about. The id is the only way to identify a chart "
-        "for editing - get it from here before calling edit_chart. Returns "
-        "NO DATA VALUES; use query for the actual numbers.",
-    ),
-    _tool(
-        "edit_chart",
-        "Change a chart that already exists, in place. Only the arguments you "
-        "pass are touched; everything else about the chart is preserved. Use "
-        "it to fix a wrong measure, rename a chart, regroup it by a different "
-        "field, recolour it, or limit it to a top N. measure_expression may "
-        "be any valid Qlik expression, including set analysis such as "
-        "Sum({<[Region]={'Almaty'}>} [SUM]) or Aggr(...) - it is checked by "
-        "Qlik before being applied and rejected with the reason if wrong.",
-        {
-            "chart_id": _STRING,
-            "title": _STRING,
-            "measure_expression": _STRING,
-            "measure_label": _STRING,
-            "dimension": _STRING,
-            "color": _STRING,
-            "limit": {"type": "integer"},
-        },
-        ["chart_id"],
-    ),
-    _tool(
-        "check_expression",
-        "Ask Qlik whether an expression is valid, without building anything. "
-        "Returns the engine's own error message and any field names that do "
-        "not exist. Use it to try a complicated expression before committing "
-        "it to a chart.",
-        {"expression": _STRING},
-        ["expression"],
-    ),
-    _tool("save", "Save the app to disk. Nothing persists until this runs."),
-]
-
-FUNCTIONS = {
-    "open_app": open_app,
-    "data_sources": data_sources,
-    "add_data_source": add_data_source,
-    "read_script": read_script,
-    "build_load_script": build_load_script,
-    "write_script": write_script,
-    "reload_data": reload_data,
-    "data_model": data_model,
-    "query": query,
-    "build_dashboard": build_dashboard,
-    "create_chart": create_chart,
-    "list_charts": list_charts,
-    "edit_chart": edit_chart,
-    "check_expression": check_expression,
-    "save": save,
-}
-
-assert {t["function"]["name"] for t in TOOLS} == set(FUNCTIONS), "tool list drifted"
-
-
-def _needs_model(name):
-    """Actions that themselves call the model, so they must be told which."""
-    return name == "build_dashboard"
-
-
-# Options for every agent-loop model call. num_ctx, because Ollama's own
-# default context is small and an oversized prompt is silently truncated from
-# the front - deleting the system prompt and its rules mid-conversation.
-# Temperature low, because tool calls want precision, not flair: the Ollama
-# default (~0.8) is where invented tool arguments come from.
-AGENT_OPTIONS = {"temperature": 0.2, "num_ctx": OLLAMA_NUM_CTX}
-
-
-def run_agent(client, model, engine, messages, allowed=None, on_call=None,
-              confirm=None, max_steps=CHAT_MAX_STEPS):
-    """Run one user turn to completion, executing tool calls as they come.
-
-    Shared by the terminal chat and the web editor so both behave the same.
-
-    allowed: restrict which tools the model may use. The web editor withholds
-        reload_data because loading is a button the person presses there,
-        exactly as it is in Qlik's own editor.
-    on_call: called with (name, arguments) before each call, for display.
-    confirm: called with a question for anything in DESTRUCTIVE; return False
-        to refuse. Omit to refuse them outright.
-    """
-
-    tools = TOOLS
-    if allowed is not None:
-        tools = [t for t in TOOLS if t["function"]["name"] in allowed]
-
-    for _ in range(max_steps):
-        messages[:] = trim_history(messages)
-        response = client.chat(
-            model=model, messages=messages, tools=tools, options=AGENT_OPTIONS
-        )
-        message = response["message"]
-
-        calls = message.get("tool_calls") or []
-        messages.append({
-            "role": "assistant",
-            "content": message.get("content", ""),
-            "tool_calls": calls,
-        })
-
-        if not calls:
-            return message.get("content", "").strip()
-
-        for call in calls:
-            name = call["function"]["name"]
-            arguments = call["function"].get("arguments") or {}
-            if isinstance(arguments, str):
-                try:
-                    arguments = json.loads(arguments)
-                except json.JSONDecodeError:
-                    arguments = {}
-
-            if on_call:
-                on_call(name, arguments)
-
-            result = execute(
-                engine, name, arguments, allowed=allowed, confirm=confirm
-            )
-            messages.append({
-                "role": "tool",
-                "content": json.dumps(result, default=str)[:TOOL_RESULT_CHARS],
-            })
-
-    return "I stopped after too many steps. Could you narrow that down?"
-
-
-# These conversations carry large tool results - one data model dump is
-# thousands of characters. Past this budget the oldest turns are dropped,
-# because overflowing the window fails the whole request, and losing the
-# start of a conversation is a much smaller loss than that. The budget is
-# derived from OLLAMA_NUM_CTX (see config.py) so a large-context model
-# actually gets to use its memory - the old fixed 24,000 characters gave a
-# 128k-context model about 6k tokens to work with.
-MAX_HISTORY_CHARS = CHAT_HISTORY_CHARS
-
-# Per-tool-result cap. Scales with the history budget: with real memory
-# available, cutting a data model dump at 12k characters throws away columns
-# the model was about to be asked about.
-TOOL_RESULT_CHARS = max(12_000, MAX_HISTORY_CHARS // 8)
-
-
-def trim_history(messages, max_chars=MAX_HISTORY_CHARS):
-    """Drop the oldest turns once the conversation gets too big.
-
-    Cuts only at user messages, never between an assistant's tool_calls and
-    the tool results that answer them - a conversation split there is
-    malformed and the model rejects it.
-    """
-
-    if not messages:
-        return messages
-
-    system = messages[:1] if messages[0].get("role") == "system" else []
-    rest = messages[len(system):]
-
-    def size(items):
-        return sum(len(str(m.get("content") or "")) for m in items)
-
-    if size(rest) <= max_chars:
-        return list(messages)
-
-    starts = [i for i, m in enumerate(rest) if m.get("role") == "user"]
-    for cut in starts:
-        if size(rest[cut:]) <= max_chars:
-            return system + rest[cut:]
-
-    # Even the latest turn is over budget; keep it anyway rather than send
-    # nothing, and let the model's own limit decide.
-    return system + (rest[starts[-1]:] if starts else rest[-2:])
-
-
-def call_parts(call):
-    """(name, arguments) from a tool call, dict or ollama object."""
-    function = call["function"] if isinstance(call, dict) else call.function
-    name = function["name"] if isinstance(function, dict) else function.name
-    arguments = (
-        function.get("arguments") if isinstance(function, dict) else function.arguments
-    ) or {}
-
-    if isinstance(arguments, str):
-        try:
-            arguments = json.loads(arguments)
-        except json.JSONDecodeError:
-            arguments = {}
-
-    return name, dict(arguments)
-
-
-def stream_agent(client, model, engine, messages, allowed=None, confirm=None,
-                 max_steps=CHAT_MAX_STEPS):
-    """Run a turn, yielding events as they happen instead of at the end.
-
-    A local model can spend minutes on a multi-step request. Returning only
-    the finished answer makes that look like the software has hung, so the
-    caller gets each tool call as it is decided and each token as it arrives.
-
-    Events: {"type": "tool"|"tool_result"|"token"|"done"}.
-    """
-
-    tools = TOOLS
-    if allowed is not None:
-        tools = [t for t in TOOLS if t["function"]["name"] in allowed]
-
-    for _ in range(max_steps):
-        content = []
-        calls = []
-
-        messages[:] = trim_history(messages)
-
-        for chunk in client.chat(
-            model=model, messages=messages, tools=tools, stream=True,
-            options=AGENT_OPTIONS,
-        ):
-            message = chunk["message"]
-
-            text = message.get("content")
-            if text:
-                content.append(text)
-                yield {"type": "token", "text": text}
-
-            calls.extend(message.get("tool_calls") or [])
-
-        messages.append({
-            "role": "assistant",
-            "content": "".join(content),
-            "tool_calls": calls,
-        })
-
-        if not calls:
-            yield {"type": "done", "reply": "".join(content).strip()}
-            return
-
-        for call in calls:
-            name, arguments = call_parts(call)
-            yield {"type": "tool", "name": name, "arguments": arguments}
-
-            result = execute(engine, name, arguments, allowed=allowed, confirm=confirm)
-            yield {
-                "type": "tool_result",
-                "name": name,
-                "ok": not isinstance(result, dict) or "error" not in result,
-                "detail": (result or {}).get("error") if isinstance(result, dict) else None,
-            }
-
-            messages.append({
-                "role": "tool",
-                "content": json.dumps(result, default=str)[:TOOL_RESULT_CHARS],
-            })
-
-    yield {"type": "done", "reply": "I stopped after too many steps. Could you narrow that down?"}
-
-
-def execute(engine, name, arguments, allowed=None, confirm=None):
-    """Run one action, refusing anything withheld or declined."""
-
-    if allowed is not None and name not in allowed:
-        return {"error": f"{name} is not available here."}
-
-    function = FUNCTIONS.get(name)
-    if function is None:
-        return {"error": f"No such action {name!r}."}
-
-    if name in DESTRUCTIVE:
-        if confirm is None or not confirm(f"{name} replaces the data in this app. Run it?"):
-            # Saying only "not allowed" makes a model conclude the action is
-            # impossible and tell the user it cannot be done at all - which
-            # is how a request to load data turns into a dead end.
-            return {
-                "cancelled": True,
-                "note": (
-                    "Not permitted right now - this is a setting, not a missing "
-                    "capability. Tell the user to press the green 'Load data' "
-                    "button, or to switch on 'assistant may load data', then "
-                    "carry on from there."
-                ),
-            }
-
-    try:
-        return function(engine, **(arguments or {}))
-    except TypeError as e:
-        return {"error": f"Bad arguments for {name}: {e}"}
-    except Exception as e:  # handed back so the model can correct itself
-        return {"error": str(e)}
-
-
+# Prompt pack — making any model work with the Qlik assistant
+
+Nothing here changes code. Each section is text you paste over an existing
+string literal:
+
+| # | What it is | Where it goes |
+|---|---|---|
+| 0 | Why the current prompt only works on gpt-oss | read first |
+| 1 | Drop-in replacement for `SYSTEM_PROMPT` | `chat_tools.py:731` |
+| 2 | Additions for `DASHBOARD_SYSTEM_PROMPT` | `prompts.py:17` |
+| 3 | 17-phrase benchmark for testing a model | reference, not for the model |
+| 4 | **The model in your `.env` is the bigger problem** | `.env` — do this first |
+| 5 | Three harness limits no prompt can fix | reference |
+
+**Read §4 before pasting anything.** The prompt work is real, but the model
+currently configured will cap how much of it lands.
+
+---
+
+## 0. Why the current prompt only works on gpt-oss
+
+The existing `SYSTEM_PROMPT` is a **rule list**. gpt-oss was tuned until it
+obeyed those rules. Almost every rule in it answers the question *"what must
+you not do?"* — don't rewrite the script, don't invent a chart type, don't
+claim a skipped chart.
+
+What it never answers is *"what do I do when the user says four words?"*
+There is no path at all for `information about the dashboards I have`, which
+is why models fall into `build_dashboard` — that is the only dashboard-shaped
+tool they can see, so a dashboard-shaped question routes to it.
+
+Five things are missing, and they are the five that differ most between
+models:
+
+1. **Intent routing.** A strong model infers "info about dashboards" =
+   read-only inventory. A weaker one needs the mapping written down, with the
+   user's actual broken phrasing in it.
+2. **A first move for every request type.** The prompt says "FIRST call
+   data_model" for charts and data. For everything else the model is guessing.
+3. **An answer contract.** Nothing says who the reader is. Models default to
+   engineer-speak: field names in brackets, tool names, JSON fragments.
+4. **A floor on how much the answer must contain.** See below — this is the
+   one that made every new model look dumber than gpt-oss.
+5. **Worked examples.** Rules alone are the weakest form of instruction for a
+   small model. Two or three transcripts of the *right* shape are worth more
+   than twenty rules.
+
+### The shrinkage problem, specifically
+
+The old prompt's last line is:
+
+> Keep answers short. Say what you did and what the result was.
+
+On gpt-oss that trims padding. On any other model it becomes the whole
+personality: one line, no numbers, no list, no mention of what was skipped.
+The model *did* the work — the tools returned nine charts — and then threw
+the content away on the way out, because it was told brevity was the goal.
+
+Three failure shapes come out of it, and all three read to a user as "this
+model is dumber":
+
+- **Compression.** "You have a few dashboards." The tool returned nine charts
+  across two sheets, with titles. All of it discarded.
+- **Truncation.** "Sales by region, monthly trend, and others." A list cut off
+  with *etc.*, *and more*, *among others* — the tail silently dropped.
+- **Early stop.** One tool call, then an answer, when the request needed
+  three. The user asked two things and got one.
+
+The fix is not "be verbose". It is to make length a **consequence of the tool
+results** rather than a target: state a floor of required content, forbid the
+specific shrinking moves by name, and let the worked examples set the norm.
+Brevity is still enforced — but as *no filler*, never as *be short*.
+
+The prompt below keeps every existing rule (and every phrase the test suite
+asserts on) and puts routing, first moves, an answer contract, and examples
+in front of them.
+
+---
+
+## 1. Drop-in replacement for `SYSTEM_PROMPT`
+
+**Before pasting, two mechanical things:**
+
+- It is an **f-string**. Every literal `{` or `}` must be doubled. The only
+  literal braces below are in the set-analysis and `derived` examples, and
+  they are already written doubled. Keep them that way.
+- Keep `{describe_chart_types()}` exactly as it is — the test suite checks the
+  chart catalogue is interpolated, not hand-written.
+
+```python
 SYSTEM_PROMPT = f"""You manage a Qlik Sense app for a business person - a \
 banker, a manager, an analyst - who does not know Qlik, does not know what \
 tools you have, and will not describe what they want precisely. They write \
@@ -1481,3 +706,264 @@ the numbers, build charts and dashboards, and load new data. What would you \
 like?
 
   (A greeting is the one case where a single line is the whole answer.)"""
+```
+
+### What each new block fixes
+
+| Block | Fixes |
+|---|---|
+| §1 three steps | Models that answered from memory now always call a tool first |
+| §2 routing, with the user's real broken phrasing | `info dashboards` no longer lands in `build_dashboard` |
+| §2 "if two fit, choose the one that only READS" | The safe default when routing is uncertain |
+| §3 per-intent sequences | Removes the guessing that differs most between models |
+| §4 vague policy | Stops the "please specify the fields" dead end a banker cannot escape |
+| §5 answer contract, as a floor | **The shrinkage fix.** Replaces "keep answers short" — the line that made every non-gpt-oss model terse — with a required minimum, a named list of shrinking moves, and per-intent content requirements |
+| §5 "no filler, not less content" | Keeps brevity without letting it eat the result |
+| §9 examples, at full length | The single biggest lever on small models. They imitate shape *and length* far better than they follow rules — thin examples would undo §5 on their own |
+
+Every phrase the test suite asserts on is preserved verbatim, so
+`pytest tests/` still passes without touching a test.
+
+### Verified, not assumed
+
+`scratchpad/verify_prompt.py` builds this block with the real
+`describe_chart_types()` and runs every assertion the five test files make
+about `SYSTEM_PROMPT` against the result:
+
+```
+prompt length : 20,570 characters (~5,142 tokens)
+assertions    : 34 checked, 0 failed
+PASS - the drop-in satisfies every assertion the test suite makes.
+```
+
+So it compiles as an f-string (the doubled braces are right) and
+`pytest tests/` will still pass after the paste.
+
+### The real context budget
+
+Measured, not estimated:
+
+| | chars | ~tokens |
+|---|---|---|
+| Old `SYSTEM_PROMPT` | 7,672 | 1,918 |
+| **New `SYSTEM_PROMPT`** | **20,570** | **5,142** |
+| Tool schemas (all 15) | 8,249 | 2,062 |
+| **Fixed overhead per call** | | **~7,200** |
+
+`OLLAMA_NUM_CTX` is **already 32768** in your `.env`, so the earlier advice to
+raise it is done. But that creates a new problem worth fixing at the same
+time.
+
+`CHAT_HISTORY_CHARS` is derived in [config.py](config.py) as
+`(OLLAMA_NUM_CTX - 6_000) * 3`, which at 32768 gives **80,304 characters ≈
+20,000 tokens** of history. That formula reserves 6,000 tokens for the system
+prompt, the tool schemas and the reply. The new prompt plus schemas is
+**7,200 tokens on its own** — the reserve is spent before a single token of
+reply is budgeted for.
+
+Add one line to `.env`:
+
+```
+CHAT_HISTORY_CHARS=66000
+```
+
+That reserves ~10,700 tokens (7,200 fixed + ~3,500 for the reply) and leaves
+~16,500 tokens of history. Without it you are back in the exact failure this
+pack warns about: Ollama truncating from the front and deleting the system
+prompt mid-conversation, three tool calls in.
+
+### If context is still tight
+
+Cut in this order: §3's F block, then §2's "ambiguous words" note, then
+examples 5–7 of §9. **Do not cut §5, and do not cut §9 below three
+examples** — those are the two things holding answer quality up, and dropping
+them puts you back where you started.
+
+---
+
+## 2. Additions for `DASHBOARD_SYSTEM_PROMPT` (`prompts.py`)
+
+This one is already strong, because it is a constrained JSON task. Two gaps
+show up on models other than gpt-oss. Add these two bullets to the existing
+`Rules:` list — nothing else needs to change:
+
+```
+- The chart TITLES are read by a business person, not an analyst. Title a
+  chart "Deposits by branch", never "Sum(SUM) by BRANCH" and never the raw
+  field name. If a field is cryptic, use the "samples" values to work out
+  what it really holds and title it accordingly.
+- If the user's instruction names a chart type, a field, or a comparison,
+  honour it exactly and build the rest of the dashboard around it. Their
+  words override your own judgement about what would look good.
+```
+
+And one line to add at the very end, immediately after the JSON schema —
+weaker models leak prose around the JSON, and this is what stops it:
+
+```
+Output the JSON object and nothing else. No explanation before it, no
+markdown fences around it, no trailing commentary. The first character you
+emit must be { and the last must be }.
+```
+
+---
+
+## 3. Reference: the banker phrasebook
+
+Not for the model — for you, when testing a new model. If a model gets these
+wrong, the prompt above is not landing and the model is a bad fit.
+
+| What the user types | Correct intent | Correct first tool | Common wrong behaviour |
+|---|---|---|---|
+| `info dashboards` | inventory | `list_charts` | builds a new dashboard |
+| `what do i have` | inventory | `list_charts` | asks "what do you mean?" |
+| `dashboard info` | inventory | `list_charts` | builds |
+| `my reports` | inventory | `list_charts` | builds |
+| `whats in this app` | inventory + data | `list_charts`, `data_model` | dumps the load script |
+| `total deposits` | number | `query` | builds a KPI chart |
+| `deposits by branch` | number | `query` | builds a bar chart |
+| `top 5 branches` | number | `query` limit=5 | puts Rank() in the expression |
+| `build a dashboard` | build | `data_model` → `build_dashboard` | rewrites the load script |
+| `pie chart of X by Y` | build | `data_model` → `create_chart` | uses `build_dashboard`, gets a different type |
+| `sankey of X to Y` | build | `create_chart` | says it is not supported |
+| `make it red` | edit | `list_charts` → `edit_chart` | rebuilds the sheet |
+| `wrong number` | edit | `list_charts` → `query` | apologises, changes nothing |
+| `load my downloads folder` | data | `data_sources` → `add_data_source` | writes a LOAD from guessed columns |
+| `clean the data` | data | `data_model` | drops columns without saying which |
+| `add a year column` | data | `build_load_script` with `derived` | says it cannot add fields |
+| `hi` / `what can you do` | chat | none | calls `data_model` for no reason |
+
+Run all 17 against a candidate model before adopting it. Score **four**
+things, and score them separately — the fourth is the one that regressed when
+you changed model:
+
+1. **Correct intent** — did it read the request right?
+2. **Correct first tool** — did it take the right first step?
+3. **Complete answer** — does every item the tool returned appear in the
+   reply? Take the tool result, count the items, count them in the answer.
+   Any `etc.`, `and others`, or a count standing in for the items is a fail,
+   even when the intent and tools were perfect.
+4. **Readable by a banker** — no field names in brackets, no tool names, no
+   JSON.
+
+Anything below 15/17 on any one of the four will generate support tickets.
+Score 3 on `info dashboards` and `sales by region` first — those two catch
+shrinkage faster than the other fifteen combined.
+
+---
+
+## 4. The model you are currently on
+
+`.env` has both `OLLAMA_MODEL` and `CHAT_MODEL` set to:
+
+```
+nutboy02/Qwen3.6-35B-A3B-Claude-4.7-Opus-abliterated-uncenfull:Q2_K_MTX
+```
+
+No prompt fully compensates for this. Four separate things in that one name
+each cost instruction-following, and they stack:
+
+1. **`Q2_K` quantization.** The most aggressive quantization in common use —
+   roughly 2.5 bits per weight. Perplexity damage at Q2_K is large, and it
+   lands hardest on exactly the behaviours you need: following a long list of
+   rules, emitting well-formed tool-call JSON, and not drifting mid-answer.
+   **Q4_K_M is the floor for tool-calling work**, and the usual
+   recommendation for a model this size. This is the single highest-value
+   change available to you, and it is a one-line edit.
+2. **`A3B` — a Mixture-of-Experts with ~3B active parameters.** The "35B" is
+   total weights; only ~3B are active per token. It is fast and memory-light,
+   but its instruction-following behaves closer to a 3–7B dense model than to
+   a 35B one. Combined with Q2_K, you are asking something in the
+   small-dense-model class to obey a 5,000-token rule set.
+3. **`abliterated` / `uncenfull`.** Abliteration ablates the refusal
+   direction from the residual stream. It is a blunt edit that reliably
+   degrades general instruction-following and coherence as a side effect —
+   the model becomes measurably worse at *all* steering, not just refusal.
+   There is nothing in a Qlik BI assistant that needs an uncensored model:
+   you are summing deposits, not writing anything a safety layer would
+   object to. This is pure downside for your use case.
+4. **A third-party merge.** Whatever base it started from, this specific
+   merge has no benchmark history and no tool-calling evaluation behind it,
+   so nothing about its behaviour is predictable. `Claude-4.7-Opus` in the
+   name cannot mean what it appears to — Claude weights are not available to
+   merge — so it is a claim about distillation data at best, and marketing at
+   worst.
+
+### The OpenRouter settings in `.env` are not wired up
+
+`.env` also has:
+
+```
+LLM_PROVIDER=ollama
+OPENROUTER_API_KEY=...
+OPENROUTER_MODEL=qwen/qwen3.6-plus
+```
+
+**No code reads any of these three.** Grepping the whole project for
+`LLM_PROVIDER` and `OPENROUTER` returns nothing outside `.env` itself. Every
+call goes through [session.py](session.py) to the `ollama` package, using
+`CHAT_MODEL`.
+
+So setting `LLM_PROVIDER=openrouter` today would change nothing and report no
+error — it would quietly keep using the local Q2_K merge. If routing to a
+hosted model is the plan, that provider path has to be built first; it is
+maybe 40 lines in [ollama_client.py](ollama_client.py) and
+[session.py](session.py), since OpenRouter speaks the OpenAI chat-completions
+format rather than Ollama's. Worth doing: a hosted `qwen3` at full precision
+removes every one of the four problems above at once, and the tool-calling
+behaviour becomes predictable.
+
+**Recommendation, in order of value:**
+
+| Change | Effort | Effect |
+|---|---|---|
+| Move to an official `qwen3` build at **Q4_K_M** or better | one line in `.env` | Largest single win. Qwen3 has genuinely good native tool calling |
+| Drop the abliterated merge for the stock model | same line | Restores normal instruction-following |
+| Raise `temperature` to ~0.6 for Qwen3 | `AGENT_OPTIONS` | Qwen3 is calibrated for 0.6–0.7; 0.2 makes it repetitive and loop-prone |
+| Then apply this prompt pack | paste | Fixes routing and shrinkage |
+
+Do the model change **first**. If you tune prompts against a Q2_K abliterated
+merge, you are tuning against noise — a phrasing that looks like it helped may
+just be a different roll of the dice, and the same prompt will behave
+differently once the quantization changes. Get onto a sane model, re-run the
+17-phrase benchmark in §3, and only then judge whether the prompt needs more
+work.
+
+One more Qwen3-specific note: it emits `<think>...</think>` reasoning blocks.
+Check that these are not reaching the user in the web UI, and not being
+counted as the answer — `transcript()` in [web_app.py:76](web_app.py#L76)
+passes assistant content straight through.
+
+---
+
+## 5. What a prompt cannot fix
+
+Three things in the harness will make even a perfect prompt look broken on
+some models. Listed here, not changed:
+
+1. **Tool results carry no tool name.** `chat_tools.py:565` and `:695` append
+   `{"role": "tool", "content": ...}` with no `name` and no `tool_call_id`.
+   gpt-oss tolerates this. The Qwen, Llama-3.x and Mistral tool-calling
+   formats expect the name back, and without it a model can re-call the same
+   tool or attach a result to the wrong call. One line each: add
+   `"name": name`.
+2. **`CHAT_HISTORY_CHARS` over-budgets the history.** Already covered above —
+   set it to 66000 in `.env`. Ollama truncates from the *front*, which
+   deletes the system prompt mid-conversation, and the model appears to
+   forget every rule after the third tool call.
+3. **`temperature: 0.2` is set for every model** (`AGENT_OPTIONS`). Right for
+   most, but reasoning models (Qwen3 thinking, gpt-oss on high) are
+   calibrated for ~0.6 and get repetitive and loop-prone at 0.2 — which shows
+   up as hitting `CHAT_MAX_STEPS`.
+4. **A tool result is cut at `TOOL_RESULT_CHARS`** (`chat_tools.py:612`,
+   12,000 characters at the default context). If `list_charts` or
+   `data_model` on a large app returns more than that, the model is answering
+   from a truncated list and *cannot* name everything — §5 will not save it,
+   because the items are already gone before it reads them. Raising
+   `OLLAMA_NUM_CTX` raises this cap with it, which is a second reason to move
+   to 32768.
+
+**How to tell shrinkage apart from truncation:** if the answer stops short,
+look at whether the tool result itself was complete. Missing items that were
+*in* the result is a prompt problem (§5). Missing items that never reached
+the model is item 2 or 4 above, and no prompt will fix it.

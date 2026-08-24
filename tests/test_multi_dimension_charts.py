@@ -235,3 +235,100 @@ class TestSheetAttribution:
         }
 
         assert engine.list_charts()[0]["sheet"] is None
+
+
+class TestEmptyChartsAreRefused:
+    """The reported failure: "it made dashboards but some were empty".
+
+    create_chart validated nothing. Ask for a pie chart and forget the
+    measure and it built one, saved it, and returned {"created": ...} - so
+    the model told the user it had worked. The app grew charts that render
+    nothing, and nobody found out until someone opened the sheet.
+    """
+
+    def _engine(self):
+        engine = RecordingEngine()
+        engine.get_fields = lambda: [{"name": "Region"}, {"name": "SUM"}]
+        engine.check_expression = lambda e: {"valid": True}
+        return engine
+
+    def test_a_chart_with_no_measure_is_not_created(self):
+        engine = self._engine()
+        result = chat_tools.create_chart(
+            engine, "piechart", "Deposits", dimensions=["Region"],
+        )
+
+        assert result.get("created") is False
+        assert "blank" in result["error"]
+        assert engine.charts == [], "nothing may reach the engine"
+        assert engine.saved == 0, "and nothing may be saved"
+
+    def test_a_chart_with_no_dimension_is_not_created(self):
+        engine = self._engine()
+        result = chat_tools.create_chart(
+            engine, "barchart", "Deposits", measures=["Sum([SUM])"],
+        )
+
+        assert result.get("created") is False
+        assert engine.charts == []
+
+    def test_the_reason_names_what_to_fix(self):
+        """A bare refusal makes a model give up; a reason makes it retry."""
+        engine = self._engine()
+        error = chat_tools.create_chart(
+            engine, "piechart", "Deposits", dimensions=["Region"],
+        )["error"]
+
+        assert "measure" in error
+        assert "Sum([Field])" in error, "it must show the shape of a fix"
+
+    def test_an_unknown_field_is_refused_with_the_real_names(self):
+        engine = self._engine()
+        result = chat_tools.create_chart(
+            engine, "barchart", "Deposits", dimensions=["Regoin"],
+            measures=["Sum([SUM])"],
+        )
+
+        assert result.get("created") is False
+        assert "Regoin" in result["error"]
+        assert "Region" in result["error"], "the real names help it correct"
+        assert engine.charts == []
+
+    def test_an_invalid_measure_is_refused_with_qliks_reason(self):
+        engine = self._engine()
+        engine.check_expression = lambda e: {
+            "valid": False, "error": "Bad field name", "bad_fields": ["Sails"],
+        }
+        result = chat_tools.create_chart(
+            engine, "barchart", "Deposits", dimensions=["Region"],
+            measures=["Sum([Sails])"],
+        )
+
+        assert result.get("created") is False
+        assert "Bad field name" in result["error"]
+        assert "Sails" in result["error"]
+        assert engine.charts == []
+
+    def test_a_valid_chart_still_gets_built(self):
+        """The guard must not become the reason nothing can be created."""
+        engine = self._engine()
+        result = chat_tools.create_chart(
+            engine, "barchart", "Deposits by region", dimensions=["Region"],
+            measures=["Sum([SUM])"],
+        )
+
+        assert result["created"] == {"type": "barchart", "title": "Deposits by region"}
+        assert len(engine.charts) == 1
+        assert engine.saved == 1
+
+    def test_validation_survives_an_engine_that_cannot_answer(self):
+        """Field lookup failing is not a reason to refuse a good chart."""
+        engine = RecordingEngine()   # no get_fields, no check_expression
+
+        result = chat_tools.create_chart(
+            engine, "barchart", "Deposits", dimensions=["Region"],
+            measures=["Sum([SUM])"],
+        )
+
+        assert result.get("created"), "shape was fine; it should have been built"
+        assert len(engine.charts) == 1

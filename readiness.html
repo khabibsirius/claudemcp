@@ -1,0 +1,545 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qlik Assistant Readiness</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&display=swap">
+
+<style>
+:root {
+  --paper:      #F7F9FB;
+  --raised:     #FFFFFF;
+  --ink:        #10151C;
+  --body:       #38414E;
+  --muted:      #6B7684;
+  --rule:       #DDE3EA;
+  --rule-soft:  #EAEFF4;
+  --accent:     #1B5E7E;
+  --accent-bg:  #E8F1F5;
+  --blocker:    #B3261E;
+  --blocker-bg: #FBEAE8;
+  --risk:       #9A5B00;
+  --risk-bg:    #FBF1E2;
+  --shipped:    #2E6B4F;
+  --shipped-bg: #E7F1EB;
+
+  --sans:  "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --serif: "IBM Plex Serif", Georgia, serif;
+  --mono:  "IBM Plex Mono", ui-monospace, "Cascadia Code", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper:      #0D1218;
+    --raised:     #141B23;
+    --ink:        #EDF1F5;
+    --body:       #BAC4CF;
+    --muted:      #8593A1;
+    --rule:       #26313C;
+    --rule-soft:  #1C242D;
+    --accent:     #6FB6D6;
+    --accent-bg:  #16303D;
+    --blocker:    #F2887F;
+    --blocker-bg: #3A1B18;
+    --risk:       #E0A957;
+    --risk-bg:    #33260F;
+    --shipped:    #7FC3A0;
+    --shipped-bg: #162C21;
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper:      #0D1218;
+  --raised:     #141B23;
+  --ink:        #EDF1F5;
+  --body:       #BAC4CF;
+  --muted:      #8593A1;
+  --rule:       #26313C;
+  --rule-soft:  #1C242D;
+  --accent:     #6FB6D6;
+  --accent-bg:  #16303D;
+  --blocker:    #F2887F;
+  --blocker-bg: #3A1B18;
+  --risk:       #E0A957;
+  --risk-bg:    #33260F;
+  --shipped:    #7FC3A0;
+  --shipped-bg: #162C21;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--body);
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 54rem;
+  margin: 0 auto;
+  padding: 3.5rem 1.5rem 6rem;
+}
+
+/* ---------- masthead ---------- */
+
+.masthead { border-bottom: 2px solid var(--ink); padding-bottom: 1.5rem; }
+
+.kicker {
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 0.85rem;
+}
+
+h1 {
+  font-family: var(--sans);
+  font-weight: 700;
+  font-size: clamp(2rem, 5.5vw, 2.9rem);
+  line-height: 1.08;
+  letter-spacing: -0.022em;
+  color: var(--ink);
+  margin: 0 0 0.9rem;
+  text-wrap: balance;
+}
+
+.standfirst {
+  font-size: 1.12rem;
+  margin: 0;
+  max-width: 40rem;
+  color: var(--body);
+}
+
+.meta {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 1.4rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.6rem;
+}
+
+/* ---------- verdict ---------- */
+
+.verdict {
+  margin: 2.5rem 0 0;
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--blocker);
+  border-radius: 3px;
+  padding: 1.4rem 1.6rem;
+}
+
+.verdict p { margin: 0; }
+.verdict strong { color: var(--ink); font-family: var(--sans); font-weight: 600; }
+
+/* ---------- sections ---------- */
+
+section { margin-top: 3.5rem; }
+
+h2 {
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 1.42rem;
+  letter-spacing: -0.012em;
+  color: var(--ink);
+  margin: 0 0 0.4rem;
+  text-wrap: balance;
+}
+
+.section-note {
+  font-size: 0.95rem;
+  color: var(--muted);
+  margin: 0 0 1.6rem;
+  max-width: 42rem;
+}
+
+/* ---------- findings ---------- */
+
+.findings { display: flex; flex-direction: column; gap: 1rem; }
+
+.finding {
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--sev, var(--muted));
+  border-radius: 3px;
+  padding: 1.25rem 1.4rem;
+}
+
+.finding-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.55rem;
+}
+
+.id {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--sev, var(--muted));
+  background: var(--sev-bg, var(--rule-soft));
+  padding: 0.16rem 0.44rem;
+  border-radius: 2px;
+  flex: none;
+}
+
+h3 {
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 1.04rem;
+  color: var(--ink);
+  margin: 0;
+  letter-spacing: -0.006em;
+}
+
+.finding p { margin: 0.55rem 0 0; font-size: 0.98rem; }
+
+.blocker { --sev: var(--blocker); --sev-bg: var(--blocker-bg); }
+.risk    { --sev: var(--risk);    --sev-bg: var(--risk-bg); }
+.ok      { --sev: var(--shipped); --sev-bg: var(--shipped-bg); }
+.info    { --sev: var(--accent);  --sev-bg: var(--accent-bg); }
+
+/* ---------- evidence ---------- */
+
+.evidence {
+  font-family: var(--mono);
+  font-size: 0.79rem;
+  line-height: 1.6;
+  background: var(--rule-soft);
+  border-radius: 2px;
+  padding: 0.7rem 0.85rem;
+  margin: 0.8rem 0 0;
+  overflow-x: auto;
+  color: var(--body);
+  white-space: pre;
+}
+
+.evidence-label {
+  font-family: var(--sans);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0.9rem 0 0.35rem;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  background: var(--rule-soft);
+  padding: 0.08em 0.32em;
+  border-radius: 2px;
+  color: var(--ink);
+}
+
+.fix {
+  margin-top: 0.85rem;
+  padding-top: 0.7rem;
+  border-top: 1px dashed var(--rule);
+  font-size: 0.93rem;
+}
+
+.fix b {
+  font-family: var(--sans);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--sev, var(--muted));
+  display: block;
+  margin-bottom: 0.2rem;
+}
+
+/* ---------- shipped table ---------- */
+
+.table-scroll { overflow-x: auto; margin-top: 0.4rem; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--sans);
+  font-size: 0.92rem;
+  font-variant-numeric: tabular-nums;
+}
+
+th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.7rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--rule);
+  padding: 0 0.9rem 0.5rem 0;
+  white-space: nowrap;
+}
+
+td {
+  border-bottom: 1px solid var(--rule-soft);
+  padding: 0.62rem 0.9rem 0.62rem 0;
+  vertical-align: top;
+  color: var(--body);
+}
+
+td:first-child { color: var(--ink); font-weight: 500; }
+td.num { font-family: var(--mono); font-size: 0.85rem; white-space: nowrap; }
+
+/* ---------- ordered plan ---------- */
+
+ol.plan { list-style: none; counter-reset: step; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.9rem; }
+
+ol.plan li {
+  counter-increment: step;
+  display: grid;
+  grid-template-columns: 2rem 1fr;
+  gap: 0.9rem;
+  align-items: start;
+}
+
+ol.plan li::before {
+  content: counter(step);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border-radius: 2px;
+  text-align: center;
+  padding: 0.22rem 0;
+  font-weight: 500;
+}
+
+ol.plan b { font-family: var(--sans); font-weight: 600; color: var(--ink); }
+
+.open-q { margin: 0; padding-left: 1.1rem; }
+.open-q li { margin-bottom: 0.6rem; font-size: 0.98rem; }
+.open-q li::marker { color: var(--accent); }
+
+footer {
+  margin-top: 4rem;
+  padding-top: 1.4rem;
+  border-top: 1px solid var(--rule);
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="kicker">Pre-production review</p>
+    <h1>Qlik Assistant Readiness</h1>
+    <p class="standfirst">Where the Qlik Sense banking assistant stands, what shipped this week, and the four things that must be resolved before anyone outside the team touches it.</p>
+    <div class="meta">
+      <span>Prepared 21 Aug, revised 24 Aug</span>
+      <span>For review today</span>
+      <span>844 tests passing</span>
+    </div>
+  </header>
+
+  <div class="verdict">
+    <p><strong>Verdict — the assistant works; the surface around it does not yet.</strong> Answer quality is now genuinely good: it routes vague requests correctly, fetches real figures, and refuses to build charts that would render blank. What is not ready is everything a bank requires around that: there is no authentication, all users share one conversation, and the app runs on Qlik Sense <em>Desktop</em>. None of those are model problems, and none are fixed by prompting.</p>
+  </div>
+
+  <section>
+    <h2>What shipped this week</h2>
+    <p class="section-note">Worth recording, because most of it came from testing against the live app rather than from reading code.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Change</th><th>Why it mattered</th><th>Evidence</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Empty charts refused</td>
+            <td><code>create_chart</code> validated nothing and returned <code>{"created": …}</code> regardless, so the model reported success for charts that render blank</td>
+            <td class="num">+7 tests</td>
+          </tr>
+          <tr>
+            <td>Rewritten system prompt</td>
+            <td>Intent routing, a completeness floor, per-chart reporting with figures, and banker-facing language</td>
+            <td class="num">1.9k → 6.3k tok</td>
+          </tr>
+          <tr>
+            <td>Empty sheets made visible</td>
+            <td><code>list_charts</code> only returned sheets holding charts, so "you have 3 sheets" was wrong</td>
+            <td class="num">3 → 4 sheets</td>
+          </tr>
+          <tr>
+            <td>Context budget guard</td>
+            <td>The reserve was sized for a prompt a quarter of today's; overflow silently deletes the system prompt mid-chat</td>
+            <td class="num">reserve 17k</td>
+          </tr>
+          <tr>
+            <td>Model swapped</td>
+            <td>Off the Q2_K abliterated merge and onto the official Q4_K_M build</td>
+            <td class="num">Q2_K → Q4_K_M</td>
+          </tr>
+          <tr>
+            <td>Realistic test data</td>
+            <td>1,269 rows over 6 months hid every scale problem</td>
+            <td class="num">1,777,919 rows</td>
+          </tr>
+          <tr>
+            <td>Capability answers grounded</td>
+            <td>Asked what it could do, it invented four dashboard "types", drill-down groups and status indicators — none of which exist. Now routed to the real catalogue with an explicit list of what it cannot do</td>
+            <td class="num">23 of 23</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Blockers</h2>
+    <p class="section-note">Each of these makes the system unfit to put in front of a banker, regardless of how good the answers are.</p>
+
+    <div class="findings">
+
+      <article class="finding blocker">
+        <div class="finding-head"><span class="id">B1</span><h3>The web app and MCP endpoint have no authentication</h3></div>
+        <p>There is no login, no token, no session identity anywhere in <code>web_app.py</code>. Anyone who can reach the port can read the bank's figures, rewrite the load script, and trigger a reload that replaces every row. The <code>/mcp</code> endpoint is mounted with the same access and no separate check.</p>
+        <p>It binds to <code>127.0.0.1</code> by default, which is the only thing containing it today. The first time someone runs it with <code>--host 0.0.0.0</code> so a colleague can try it, that containment is gone and nothing warns them.</p>
+        <div class="fix"><b>Before pre-prod</b>Authentication in front of both the UI and <code>/mcp</code>, and refuse to start on a non-loopback host unless auth is configured.</div>
+      </article>
+
+      <article class="finding blocker">
+        <div class="finding-head"><span class="id">B2</span><h3>Every user shares one conversation and one Qlik session</h3></div>
+        <p><code>session.py</code> holds a single module-level <code>_state</code>: one engine, one message list, one <code>chat_id</code>. Two people using the assistant at once are in the <em>same</em> conversation — each sees the other's questions, and the second person's request lands mid-way through the first person's context.</p>
+        <p>This is deliberate and correct for what it was built as: a single-operator tool where the web UI and the MCP client deliberately share one open app. It just does not survive a second concurrent user.</p>
+        <div class="fix"><b>Decision needed</b>Either scope state per session, or state plainly that this is a single-operator tool and license it that way. The second is a legitimate answer — but it must be a decision, not a discovery.</div>
+      </article>
+
+      <article class="finding blocker">
+        <div class="finding-head"><span class="id">B3</span><h3>It runs against Qlik Sense Desktop</h3></div>
+        <p><code>QLIK_MODE=desktop</code>, port 4848. Desktop is a single-user workstation product: it permits one session per app, which is why the <code>hi</code> app could not be written to while it was open in the Qlik window. Enterprise support exists in <code>config.py</code> — certificates, user directory, <code>QLIK_SSL_VERIFY</code> — but has not been exercised.</p>
+        <div class="fix"><b>Before pre-prod</b>Stand up against Enterprise with certificate auth and run the full flow there. Expect the per-user identity question to surface immediately, and it interacts with B1.</div>
+      </article>
+
+      <article class="finding blocker">
+        <div class="finding-head"><span class="id">B4</span><h3><code>.env</code> is tracked by git, and now holds a live API key</h3></div>
+        <p><code>.gitignore</code> lists <code>.env</code>, but gitignore does not untrack a file that was already committed — and this one was, in the first commit.</p>
+        <p class="evidence-label">Verified</p>
+        <div class="evidence">git ls-files .env          -> .env            (tracked)
+git show HEAD:.env        -> APP_NAME, OLLAMA_MODEL,
+                             QLIK_HOST, QLIK_PORT
+git log -p --all -- .env  -> 0 occurrences of the key</div>
+        <p>The good news is the committed version holds only harmless settings, so <strong>nothing has leaked</strong>. The risk is latent: the working copy now contains a live <code>OPENROUTER_API_KEY</code>, and the next <code>git commit -a</code> publishes it.</p>
+        <div class="fix"><b>One command</b><code>git rm --cached .env</code> — untracks it, leaves the file on disk. Do this before the next commit, not after.</div>
+      </article>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>Correctness risks</h2>
+    <p class="section-note">These are specific to putting a language model in front of financial figures. They do not crash anything, which is what makes them dangerous.</p>
+
+    <div class="findings">
+
+      <article class="finding risk">
+        <div class="finding-head"><span class="id">R1</span><h3>The model does its own arithmetic, and sometimes gets it wrong</h3></div>
+        <p>Observed in a live run: <em>"the top 3 regions hold roughly 79%"</em> when its own returned figures give 64%. Earlier runs computed the same figure correctly, so it is intermittent — which is worse than consistent, because it passes review.</p>
+        <p>A banker has no way to tell a computed percentage from a fabricated one, and the surrounding text is accurate and confident either way.</p>
+        <div class="fix"><b>Recommended</b>Compute shares, totals and period-on-period change inside <code>query</code> and hand the model finished percentages. Never let it derive a number it could instead be given.</div>
+      </article>
+
+      <article class="finding risk">
+        <div class="finding-head"><span class="id">R2</span><h3>Coverage varies run to run on the same question</h3></div>
+        <p>The same request produced 6, 7 and 8 tool calls across three runs. One run queried the high-value flag and found it captures 99.99% of the book — a genuinely useful finding. The next run skipped it, and said nothing about having skipped it.</p>
+        <p>In the last measured run, 11 of 28 chart rows carried figures; the other 17 described the chart's purpose instead.</p>
+        <div class="fix"><b>Recommended</b>The prompt already requires an explicit "not queried" marker. It is being applied twice where it should apply seventeen times — tighten it, or enforce coverage in code rather than by instruction.</div>
+      </article>
+
+      <article class="finding risk">
+        <div class="finding-head"><span class="id">R3</span><h3>Nothing checks the answer against the tool results</h3></div>
+        <p>Every guarantee about the reply is a sentence in the system prompt. There is no code path that compares the figures in the final answer to what the tools actually returned, so R1 and R2 are invisible until a person notices.</p>
+        <p>The same gap covers claims the assistant makes about <em>itself</em>. Asked what it could build, it described dashboard templates, drill-down hierarchies and red/green status indicators — none of which exist anywhere in the code. That specific case is now fixed, but the fix is another prompt rule, with the same fragility as the rest.</p>
+        <div class="fix"><b>Worth discussing</b>A cheap post-check — every number in the reply must appear in a tool result — would catch fabricated figures without a second model call. Chart-type names could be checked the same way, against the catalogue.</div>
+      </article>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>Operational gaps</h2>
+    <p class="section-note">Not blockers on their own, but each one becomes a support ticket nobody can answer.</p>
+
+    <div class="findings">
+
+      <article class="finding risk">
+        <div class="finding-head"><span class="id">O1</span><h3>Four minutes per question, single-threaded</h3></div>
+        <p>An inventory question runs ~250 s: 6–8 tool calls plus a long reply. The 22 GB model already occupies a 12 GB GPU and spills into system RAM, and there is no queueing — a second request waits on the first through the shared lock.</p>
+      </article>
+
+      <article class="finding risk">
+        <div class="finding-head"><span class="id">O2</span><h3>Conversations are written to disk in the clear</h3></div>
+        <p>Full transcripts, including the figures pulled from the app, are saved as JSON under <code>~/.qlik-ai/history</code>, capped at 200 files. For a bank this needs a retention policy and a decision on whether transcripts count as customer data. There is also no audit trail of who asked what or who changed the load script.</p>
+      </article>
+
+      <article class="finding risk">
+        <div class="finding-head"><span class="id">O4</span><h3>The system prompt now takes a third of the context window</h3></div>
+        <p>Every behaviour fixed this week was fixed by adding rules, and the prompt grew with each one. It is now <strong>8,572 tokens</strong>; with the tool schemas that is <strong>10,698 of 32,768 — 33%</strong> spent before the user says anything.</p>
+        <p class="evidence-label">CHAT_HISTORY_RESERVE, raised three times in four days</p>
+        <div class="evidence">Fri   6,000  -> 10,000    prompt outgrew the original reserve
+Fri  10,000  -> 13,000    room for a full inventory briefing
+Mon  13,000  -> 17,000    per-chart reporting
+Mon  17,000  -> 18,000    capability intent
+                          history now ~14,700 tok (~20 turns)</div>
+        <p>Nothing is broken — a guard test recomputes the real prompt size and fails the build before it can overflow, which is how each of these was caught rather than discovered in production. But the trend is one-directional, and each raise buys prompt room by taking conversation memory.</p>
+        <div class="fix"><b>Not filed as a blocker</b>It breaks nothing today, and calling it one would dilute B1–B4. It becomes a blocker the moment either the window shrinks or a session needs more than 20 turns. The next increase should be a decision to <em>trim</em> the prompt — the note is already in <code>config.py</code>.</div>
+      </article>
+
+      <article class="finding info">
+        <div class="finding-head"><span class="id">O3</span><h3>Dead configuration, and repo dust</h3></div>
+        <p><code>LLM_PROVIDER</code>, <code>OPENROUTER_API_KEY</code> and <code>OPENROUTER_MODEL</code> are set in <code>.env</code> and read by nothing — grep finds no reference anywhere in the project. Setting <code>LLM_PROVIDER=openrouter</code> today silently keeps using the local model. Six <code>__pycache__/*.pyc</code> files and an empty file named <code>python</code> are also tracked.</p>
+        <div class="fix"><b>Either or</b>Implement the provider path (~40 lines; OpenRouter speaks OpenAI chat-completions, not Ollama's format) or delete the keys. A hosted model at full precision would also retire R1.</div>
+      </article>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>Suggested order for Monday</h2>
+    <p class="section-note">Sequenced because the dependencies are real, not to rank importance.</p>
+    <ol class="plan">
+      <li><span><b>Untrack <code>.env</code>.</b> One command, thirty seconds, and it stops being a risk permanently. Do it before any other commit.</span></li>
+      <li><span><b>Decide single-operator or multi-user.</b> B2 and B1 both hang off this answer, and so does the Enterprise work in B3. Nothing else should start until it is settled.</span></li>
+      <li><span><b>Load the 1.78M-row dataset and re-run the benchmark.</b> The 17-phrase list catches routing and shrinkage; at this scale the arithmetic in R1 is far easier to spot, because the numbers stop being round.</span></li>
+      <li><span><b>Move share and change calculations into <code>query</code>.</b> Removes the largest single source of wrong numbers, and shortens replies at the same time.</span></li>
+      <li><span><b>Stand up Enterprise with certificates.</b> Longest lead time of anything here, so it should start today even if it finishes later.</span></li>
+      <li><span><b>Agree a prompt budget and stop raising the reserve.</b> O4 is at 33% of the window after three raises in four days. Pick a ceiling now, while trimming is a choice rather than an emergency.</span></li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Open questions for the room</h2>
+    <ul class="open-q">
+      <li>How many people use this at once on day one? The honest answer may be "one", and that makes B1 and B2 much cheaper.</li>
+      <li>Is a four-minute answer acceptable to a banker, or does that alone force a hosted model?</li>
+      <li>Do chat transcripts containing customer figures fall under the bank's data-retention rules? This decides whether O2 is paperwork or an architecture change.</li>
+      <li>Who owns the Qlik Enterprise certificates, and how long does issuing them take?</li>
+    </ul>
+  </section>
+
+  <footer>
+    Findings verified against the live app, 21&ndash;24 Aug 2026 · qwen3.6:35b-a3b-mtp-q4_K_M · 844 tests passing · unverified judgement is marked as such in the text
+  </footer>
+
+</div>
+</body>
+</html>

@@ -112,8 +112,31 @@ OLLAMA_NUM_CTX = _int_env("OLLAMA_NUM_CTX", 16384)
 # room for the system prompt, tool schemas and the reply. The old fixed
 # 24,000 was sized for a 7B model and gave a 128k-context model ~6k tokens of
 # working memory - it forgot the user's request two tool calls in.
+#
+# The reserve is measured, not guessed: SYSTEM_PROMPT is ~6,300 tokens and the
+# tool schemas ~2,100, so ~8,300 is spent before the conversation starts. The
+# old 6,000 reserve was set when the prompt was a quarter of its current size
+# and now overflows the window on its own, which Ollama resolves by silently
+# truncating the FRONT - deleting the system prompt and its rules mid-chat.
+#
+# The rest is for the reply, and the reply is the reason this is not
+# tighter. An inventory briefing lists EVERY chart on its own numbered row
+# with its own figures - a 34-chart app is 34 rows plus an overall picture,
+# which is 5,000 tokens of output. Sized so that finishes rather than being
+# cut off mid-table, which is the worst possible outcome: a table that stops
+# at row 19 looks like the app only has 19 charts.
+#
+# 18,000 leaves ~14,700 tokens of history - roughly 20 turns, which is still
+# more conversation than a working session uses.
+#
+# This has been raised three times as the prompt grew. It is now more than
+# half the window, and the next increase should be a decision to TRIM the
+# prompt instead: past this point the assistant is spending more context on
+# its instructions than on the user's conversation.
+CHAT_HISTORY_RESERVE = 18_000
+
 CHAT_HISTORY_CHARS = _int_env(
-    "CHAT_HISTORY_CHARS", max(24_000, (OLLAMA_NUM_CTX - 6_000) * 3)
+    "CHAT_HISTORY_CHARS", max(24_000, (OLLAMA_NUM_CTX - CHAT_HISTORY_RESERVE) * 3)
 )
 
 # How many tool calls the assistant may make for one request. A real

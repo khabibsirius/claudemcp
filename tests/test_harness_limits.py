@@ -75,8 +75,44 @@ class TestBudgetsScaleWithTheContextWindow:
 
     def test_history_budget_tracks_num_ctx(self):
         """With a real context window configured, the history budget must
-        grow with it rather than staying at the 7B-era constant."""
-        assert config.CHAT_HISTORY_CHARS >= (config.OLLAMA_NUM_CTX - 6_000) * 3
+        grow with it rather than staying at the 7B-era constant.
+
+        The reserve subtracted here is what the system prompt, the tool
+        schemas and the reply need. It was 6,000 while the prompt was ~1,900
+        tokens; the prompt is now ~5,100 and the schemas ~2,100, so 6,000 no
+        longer covers the fixed overhead and the window overflows before the
+        conversation starts. test_the_reserve_covers_the_real_overhead below
+        is what keeps this number honest as the prompt changes.
+        """
+        reserve = config.CHAT_HISTORY_RESERVE
+        assert config.CHAT_HISTORY_CHARS >= (config.OLLAMA_NUM_CTX - reserve) * 3
+
+    def test_the_reserve_covers_the_real_overhead(self):
+        """The reserve is measured against the actual prompt, not guessed.
+
+        Grow SYSTEM_PROMPT past what CHAT_HISTORY_RESERVE allows for and this
+        fails here, rather than as Ollama silently truncating the front of
+        the prompt in production and deleting every rule the model has.
+        """
+        import json
+
+        from chat_tools import SYSTEM_PROMPT, TOOLS
+
+        # ~4 characters per token for English prose and JSON schemas.
+        fixed = (len(SYSTEM_PROMPT) + len(json.dumps(TOOLS))) // 4
+
+        # The reply needs room too. An inventory briefing puts EVERY chart
+        # on its own numbered row with its own figures, so a 34-chart app is
+        # 34 rows plus an overall picture. A table cut off at row 19 reads as
+        # "the app has 19 charts", which is worse than no answer at all.
+        REPLY_ALLOWANCE = 7_000
+
+        assert config.CHAT_HISTORY_RESERVE >= fixed + REPLY_ALLOWANCE, (
+            f"fixed overhead is ~{fixed:,} tokens and a long reply needs "
+            f"~{REPLY_ALLOWANCE:,} more, but only "
+            f"{config.CHAT_HISTORY_RESERVE:,} is reserved - either trim "
+            f"SYSTEM_PROMPT or raise CHAT_HISTORY_RESERVE"
+        )
 
     def test_step_cap_allows_a_real_load_and_chart_flow(self):
         assert config.CHAT_MAX_STEPS >= 25
