@@ -49,7 +49,7 @@ INDEX = HERE / "web" / "index.html"
 # and chart it" into a dead end.
 ASSISTANT_TOOLS = LOAD_EDITOR_TOOLS | {
     "build_dashboard", "create_chart", "list_charts", "edit_chart", "check_expression",
-    "save", "open_app", "reload_data",
+    "analyze_sheet", "save", "open_app", "reload_data",
 }
 
 
@@ -105,6 +105,8 @@ class Selection(BaseModel):
     app: str = ""
     model: str = ""
     allow_reload: bool | None = None
+    # "" means follow whatever language the question was written in.
+    language: str | None = None
 
 
 @app.get("/")
@@ -135,6 +137,7 @@ def get_state():
         "sheets": safely(engine_.list_sheets, []),
         "has_data": bool(safely(engine_.get_fields, [])),
         "allow_reload": session.allow_reload(),
+        "language": session.language(),
         "assistant_ready": session.assistant_ready(),
         "chat_id": session.chat_id(),
         "transcript": transcript(session.messages()),
@@ -175,6 +178,9 @@ def post_select(selection: Selection):
     if selection.allow_reload is not None:
         session.set_allow_reload(selection.allow_reload)
 
+    if selection.language is not None:
+        session.set_language(selection.language)
+
     if selection.model and selection.model != session.model():
         try:
             session.set_model(selection.model)
@@ -189,7 +195,7 @@ def post_select(selection: Selection):
 
     return {
         "ok": True, "app": session.app_name(), "model": session.model(),
-        "allow_reload": session.allow_reload(),
+        "allow_reload": session.allow_reload(), "language": session.language(),
     }
 
 

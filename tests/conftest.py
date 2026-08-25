@@ -11,6 +11,7 @@ import websocket
 # The project is a flat set of modules rather than an installed package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import glossary  # noqa: E402
 import history  # noqa: E402
 from qlik_engine import QlikEngine  # noqa: E402
 
@@ -23,6 +24,16 @@ def isolated_history(tmp_path, monkeypatch):
     a test run quietly files itself into ~/.qlik-ai/history.
     """
     monkeypatch.setattr(history, "HISTORY_DIR", str(tmp_path / "history"))
+
+
+@pytest.fixture(autouse=True)
+def no_local_glossary(tmp_path, monkeypatch):
+    """Keep a developer's own glossary.md out of the system prompt.
+
+    system_prompt() reads it from disk, so without this the suite would pass
+    or fail depending on whether the machine running it happens to have one.
+    """
+    monkeypatch.setattr(glossary, "GLOSSARY_FILE", str(tmp_path / "absent.md"))
 
 
 class FakeEngineSocket:

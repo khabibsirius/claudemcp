@@ -54,6 +54,8 @@ chart_specs.py      property trees for each native chart type
 prompts.py          system prompt + field-list prompt
 ollama_client.py    local LLM calls, constrained to JSON
 dashboard_builder.py  design -> validate against real fields -> build
+insights.py         reads a sheet's numbers and does the arithmetic itself
+glossary.py         your own definitions, prepended to the system prompt
 mcp_server.py       all of the above as MCP tools and resources
 ```
 
@@ -67,7 +69,19 @@ mcp_server.py       all of the above as MCP tools and resources
    references a field which doesn't exist — it creates the object and renders
    an empty box. Validation is the only thing standing between a hallucinated
    field name and a silently blank chart.
-3. `mcp_server.py` wraps both as MCP tools.
+3. `insights.py` closes the other half of that gap. Building a chart never
+   reads a value out of it, so an assistant asked what the dashboard *means*
+   is answering from field names - and a small local model asked to fetch the
+   rows and do the percentages itself returns a fluent paragraph with wrong
+   numbers in it. The rows are read and the arithmetic is done in Python;
+   totals, shares, concentration and period-on-period change are handed to
+   the model as facts it did not compute, for it to put into the reader's own
+   language. Shares and totals are withheld for a measure that does not add
+   up, such as an average or a margin. `query` carries the same shares, so
+   the percentage is computed in Python whichever way the assistant reaches
+   the data - and a "top 5" is a share of the whole book rather than of the
+   five rows on the page.
+4. `mcp_server.py` wraps both as MCP tools.
 
 ## Setup
 
@@ -88,6 +102,46 @@ You'll need:
 - **Ollama** running with the model in `.env` pulled, e.g.
   `ollama pull phi4:14b` — only for the AI-design features, not the
   low-level MCP tools.
+
+### Your own definitions
+
+The assistant does not know that your financial year starts in April, or
+what your institution means by "retail". Copy `glossary.example.md` to
+`glossary.md` and write it down in plain sentences:
+
+```markdown
+- **Retail** means `agent` = Физические лица.
+- **Concentration** is the share held in the three largest regions.
+  Anything above 60% must be flagged as a risk.
+- We do not hold interest rates in this app. Say so rather than using
+  deposit size as a proxy.
+```
+
+It is read at the start of every conversation, so an edit takes effect in
+the next chat without a restart. Delete the file to turn it off. It is
+reference the assistant reads, not instructions - the rules that keep it to
+real fields and real figures come after it and cannot be overridden from
+there.
+
+`glossary.md` is gitignored: the definitions are yours, not the project's.
+
+### Interface language
+
+English, Russian and Uzbek, from the picker in the header. It follows the
+browser on a first visit and is remembered per machine afterwards.
+
+The setting does both halves: it translates the software's own words *and*
+pins the language the assistant answers in. Those are separate problems - the
+assistant would otherwise follow whatever language each question happened to
+be typed in, so a field name written in English mid-sentence flipped the
+whole answer to English.
+
+What is never translated is the data. Field names, table names, chart types
+and category values keep the spelling Qlik has for them, in every language -
+a translated field name builds a chart that renders empty, and a renamed
+deposit category is as wrong as a wrong number to the person reading it.
+Strings live in `STRINGS` at the top of the script block in
+[web/index.html](web/index.html); a new language is one more entry.
 
 ### Qlik Sense Desktop (default)
 

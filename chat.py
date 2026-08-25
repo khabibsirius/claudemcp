@@ -20,7 +20,7 @@ import sys
 import ollama
 
 import session
-from chat_tools import SYSTEM_PROMPT, execute, run_agent
+from chat_tools import execute, run_agent, system_prompt
 from config import APP_NAME, CHAT_MODEL, CHAT_MAX_STEPS
 from ollama_client import OllamaError
 from qlik_engine import QlikEngine, QlikEngineError
@@ -133,7 +133,7 @@ def main(argv=None):
         print(BANNER)
         print(f"Connected to {args.app!r} using {model}.\n")
 
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages = [{"role": "system", "content": system_prompt()}]
 
         while True:
             try:

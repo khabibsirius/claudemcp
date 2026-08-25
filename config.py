@@ -104,8 +104,10 @@ OLLAMA_TIMEOUT = _float_env("OLLAMA_TIMEOUT", 600.0)
 # carrying all the rules. That doesn't error; it lobotomises the assistant
 # mid-conversation, which reads as "the model is stupid" when it is actually
 # blindfolded. Raise this as far as the machine's memory allows - a large
-# model on a dedicated server is comfortable at 32768 or 65536.
-OLLAMA_NUM_CTX = _int_env("OLLAMA_NUM_CTX", 16384)
+# model on a dedicated server is comfortable at 32768 or 65536. The old
+# default of 16384 was smaller than CHAT_HISTORY_RESERVE below - the whole
+# window could not hold the system prompt, tool schemas and a full reply.
+OLLAMA_NUM_CTX = _int_env("OLLAMA_NUM_CTX", 32768)
 
 # Character budget for the chat history sent to the model, derived from the
 # context window unless set explicitly: roughly 3 characters per token, minus
@@ -129,11 +131,13 @@ OLLAMA_NUM_CTX = _int_env("OLLAMA_NUM_CTX", 16384)
 # 18,000 leaves ~14,700 tokens of history - roughly 20 turns, which is still
 # more conversation than a working session uses.
 #
-# This has been raised three times as the prompt grew. It is now more than
-# half the window, and the next increase should be a decision to TRIM the
-# prompt instead: past this point the assistant is spending more context on
-# its instructions than on the user's conversation.
-CHAT_HISTORY_RESERVE = 18_000
+# This has been raised four times as the prompt grew - most recently when
+# the worked examples and the numbers/language sections were merged into
+# one prompt. It is now more than half a 32k window, and the next increase
+# should be a decision to TRIM the prompt instead: past this point the
+# assistant is spending more context on its instructions than on the
+# user's conversation.
+CHAT_HISTORY_RESERVE = 19_000
 
 CHAT_HISTORY_CHARS = _int_env(
     "CHAT_HISTORY_CHARS", max(24_000, (OLLAMA_NUM_CTX - CHAT_HISTORY_RESERVE) * 3)
@@ -164,6 +168,16 @@ HISTORY_DIR = _str_env(
 # The sidebar is a flat list and building it reads every file, so the count
 # is capped. 0 disables pruning for anyone who would rather keep the lot.
 HISTORY_MAX = _int_env("HISTORY_MAX", 200)
+
+
+# ----------------------------------------------------------------------
+# Glossary
+# ----------------------------------------------------------------------
+
+# The institution's own definitions - fiscal year, what a ratio is made of -
+# read at the start of every conversation. Absent by default: most installs
+# never write one.
+GLOSSARY_FILE = _str_env("GLOSSARY_FILE", "glossary.md")
 
 
 def summary():
