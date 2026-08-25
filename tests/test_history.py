@@ -46,6 +46,7 @@ def test_new_id_is_valid_and_unique():
     "20260810-120000-ab",        # too short
     "20260810-120000-zzzz",      # not hex
     "20260810-120000-abcd.json",
+    "20260810-120000-abcd\n",     # $ matched before the trailing newline
     "", None, "*",
 ])
 def test_bad_ids_are_rejected(bad):
@@ -251,6 +252,71 @@ def test_switching_chats_saves_the_one_being_left():
     assert history.load(second)["messages"][-1]["content"] == "second chat"
 
 
+def test_reopening_a_chat_reopens_the_app_it_was_about(monkeypatch):
+    """The regression: a chat saved against another app was restored on top
+    of whatever was open, so the model reasoned about the wrong data model."""
+    class Switchable:
+        connected = True
+
+        def __init__(self):
+            self.opened = []
+
+        def open_app(self, name):
+            self.opened.append(name)
+
+        def close(self):
+            self.connected = False
+
+    engine = Switchable()
+    # Changing app opens a new session - Desktop frees an app only when the
+    # socket holding it closes - so the same fake stands in for that one too.
+    def new_session():
+        engine.connected = True
+        return engine
+
+    monkeypatch.setattr(session, "QlikEngine", new_session)
+    session._state.update({"engine": engine, "app_name": "sales"})
+    try:
+        chat_id = history.new_id()
+        history.save(chat_id, chat("about finance"), "finance")
+
+        record = session.load_chat(chat_id)
+
+        assert engine.opened == ["finance"]
+        assert session.app_name() == "finance"
+        assert "app_mismatch" not in record
+        assert session.messages()[-1]["content"] == "answer to about finance"
+    finally:
+        session._state.update({"engine": None, "app_name": None})
+
+
+def test_a_chat_whose_app_cannot_be_reopened_still_loads_but_says_so():
+    """Losing the transcript would be worse than the mismatch - but the
+    caller has to hear about it rather than silently answering about the
+    wrong app's fields."""
+    class Refuses:
+        connected = True
+
+        def open_app(self, name):
+            raise RuntimeError("engine says no")
+
+        def close(self):
+            self.connected = False
+
+    session._state.update({"engine": Refuses(), "app_name": "sales"})
+    try:
+        chat_id = history.new_id()
+        history.save(chat_id, chat("hello"), "finance")
+
+        record = session.load_chat(chat_id)
+
+        assert "finance" in record["app_mismatch"]
+        assert session.chat_id() == chat_id
+        assert session.messages()[-1]["content"] == "answer to hello"
+    finally:
+        session._state.update({"engine": None, "app_name": None})
+
+
 def test_deleting_the_open_chat_starts_a_fresh_one():
     session.reset_chat()
     session.messages().append({"role": "user", "content": "doomed"})
@@ -357,10 +423,25 @@ def test_open_endpoint_restores_context_and_transcript(client):
     saved = session.chat_id()
     client.post("/api/chats")
 
-    body = client.get(f"/api/chats/{saved}").json()
+    body = client.post(f"/api/chats/{saved}/open").json()
     assert body["transcript"] == [{"role": "user", "content": "restore me"}]
     assert session.chat_id() == saved
     assert session.messages()[-1]["content"] == "restore me"
+
+
+def test_get_chat_is_read_only_so_prefetch_cannot_switch(client):
+    """The regression: GET /api/chats/{id} switched the live conversation,
+    so a browser prefetching sidebar links silently swapped the open chat."""
+    session.messages().append({"role": "user", "content": "restore me"})
+    session.persist()
+    saved = session.chat_id()
+    client.post("/api/chats")
+    fresh = session.chat_id()
+
+    body = client.get(f"/api/chats/{saved}").json()
+    assert body["transcript"] == [{"role": "user", "content": "restore me"}]
+    assert session.chat_id() == fresh
+    assert "restore me" not in str(session.messages())
 
 
 def test_delete_endpoint_removes_the_chat(client):
@@ -380,3 +461,158 @@ def test_delete_endpoint_removes_the_chat(client):
 ])
 def test_bad_chat_ids_are_404_not_a_stack_trace(client, path):
     assert client.get(path).status_code == 404
+    assert client.post(path + "/open").status_code == 404
+
+
+# ----------------------------------------------------------------------
+# Repairing older saves
+# ----------------------------------------------------------------------
+
+def test_a_chat_saved_with_flattened_tool_calls_is_repaired(store):
+    """Chats saved before tool calls were stored as plain dicts hold them
+    as repr strings - reopening one and asking the next question crashed
+    on the model's message validation. The strings are unrecoverable, so
+    load() drops them and keeps the tool results that followed."""
+    chat_id = history.new_id()
+    messages = chat("show sales")
+    messages.insert(2, {
+        "role": "assistant", "content": "",
+        "tool_calls": ["function=Function(name='query', arguments={})"],
+    })
+    messages.insert(3, {"role": "tool", "content": '{"rows": []}'})
+    history.save(chat_id, messages)
+
+    restored = history.load(chat_id)["messages"]
+
+    broken = [m for m in restored if m.get("tool_calls") is not None]
+    assert broken == [], "string tool calls must not reach the model"
+    assert any(m.get("role") == "tool" for m in restored)
+
+
+def test_repair_keeps_the_tool_calls_that_are_still_dicts(store):
+    chat_id = history.new_id()
+    messages = chat("show sales")
+    good = {"function": {"name": "query", "arguments": {"limit": 5}}}
+    messages.insert(2, {
+        "role": "assistant", "content": "",
+        "tool_calls": ["function=Function(name='save', arguments={})", good],
+    })
+    history.save(chat_id, messages)
+
+    restored = history.load(chat_id)["messages"]
+
+    kept = [c for m in restored for c in m.get("tool_calls", [])]
+    assert kept == [good]
+
+
+# ----------------------------------------------------------------------
+# The order of the sidebar
+# ----------------------------------------------------------------------
+
+@pytest.fixture
+def ticking_clock(monkeypatch):
+    """A distinct timestamp per save, so ordering is not a race."""
+    tick = iter(f"2026-08-24T10:{minute:02d}:00+00:00" for minute in range(60))
+    monkeypatch.setattr(history, "_now", lambda: next(tick))
+
+
+def test_visiting_a_chat_does_not_move_it_up_the_list(store, ticking_clock):
+    """The sidebar is ordered by "updated", and leaving a chat writes it
+    again - so merely opening an old chat re-dated it and swapped it above
+    the one the user had just been typing in."""
+    older, newer = history.new_id(), history.new_id()
+    history.save(older, chat("an old question"))
+    history.save(newer, chat("what i just asked"))
+    stamps = {c["id"]: c["updated"] for c in history.listing()}
+
+    # What leaving the old chat again does: the same messages, saved again.
+    history.save(older, chat("an old question"))
+
+    assert [c["id"] for c in history.listing()] == [newer, older]
+    assert {c["id"]: c["updated"] for c in history.listing()} == stamps
+
+
+def test_a_chat_that_was_talked_in_does_move_up(store, ticking_clock):
+    """The other half of the rule: a real new turn is what re-dates a chat."""
+    older, newer = history.new_id(), history.new_id()
+    history.save(older, chat("an old question"))
+    history.save(newer, chat("what i just asked"))
+
+    history.save(older, chat("an old question", "and one more thing"))
+
+    assert [c["id"] for c in history.listing()] == [older, newer]
+
+
+# ----------------------------------------------------------------------
+# Renaming
+# ----------------------------------------------------------------------
+
+def test_rename_gives_the_chat_its_own_name(store):
+    chat_id = history.new_id()
+    history.save(chat_id, chat("what is total sales?"), "data")
+
+    history.rename(chat_id, "Sales review")
+
+    assert history.load(chat_id)["title"] == "Sales review"
+    assert history.listing()[0]["title"] == "Sales review"
+
+
+def test_a_renamed_chat_keeps_its_name_when_it_is_talked_in_again(store):
+    """The name is derived from the first question on every save, so without
+    this the next answer would quietly rename the chat back."""
+    chat_id = history.new_id()
+    history.save(chat_id, chat("what is total sales?"), "data")
+    history.rename(chat_id, "Sales review")
+
+    history.save(chat_id, chat("what is total sales?", "and by region?"), "data")
+
+    assert history.load(chat_id)["title"] == "Sales review"
+
+
+def test_renaming_does_not_move_the_chat_up_the_list(store, ticking_clock):
+    """A name is not a change to the conversation, and the sidebar is
+    ordered by when a chat was last talked in."""
+    older, newer = history.new_id(), history.new_id()
+    history.save(older, chat("an old question"))
+    history.save(newer, chat("what i just asked"))
+
+    history.rename(older, "Renamed")
+
+    assert [c["id"] for c in history.listing()] == [newer, older]
+
+
+def test_a_long_name_is_cut_like_a_derived_one(store):
+    chat_id = history.new_id()
+    history.save(chat_id, chat("hi"), "data")
+
+    history.rename(chat_id, "x" * 200)
+
+    title = history.load(chat_id)["title"]
+    assert len(title) == history.TITLE_CHARS + 1 and title.endswith("…")
+
+
+def test_a_name_of_only_whitespace_is_refused(store):
+    chat_id = history.new_id()
+    history.save(chat_id, chat("hi"), "data")
+
+    with pytest.raises(ValueError):
+        history.rename(chat_id, "   ")
+
+    assert history.load(chat_id)["title"] == "hi"
+
+
+def test_renaming_a_chat_that_is_not_there_is_none(store):
+    assert history.rename(history.new_id(), "Nowhere") is None
+
+
+def test_renaming_keeps_the_conversation_intact(store):
+    """Only the name changes - the messages are what the model remembers."""
+    chat_id = history.new_id()
+    messages = chat("what is total sales?", "and by region?")
+    history.save(chat_id, messages, "data")
+
+    history.rename(chat_id, "Sales review")
+
+    record = history.load(chat_id)
+    assert record["messages"] == messages
+    assert record["app"] == "data"

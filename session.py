@@ -16,7 +16,7 @@ import history
 from chat_tools import system_prompt
 from config import APP_NAME, CHAT_MODEL, OLLAMA_HOST
 from ollama_client import OllamaError, pick_tool_model
-from qlik_engine import QlikEngine, QlikNotConnectedError
+from qlik_engine import QlikConnectionError, QlikEngine, QlikNotConnectedError
 
 log = logging.getLogger(__name__)
 
@@ -96,13 +96,62 @@ def engine():
     return _state["engine"]
 
 
+def list_apps():
+    """Every app on this Qlik, whether one is open or not.
+
+    Listing needs a connection, not an open document, but the picker used to
+    ask through engine() - which refuses when nothing is open - and fell back
+    to showing the single app it already had. With one entry in the list
+    there was nothing to switch TO, so the app could not be changed at all
+    from a session that had lost its document.
+    """
+    with _lock:
+        if connected():
+            return [a["name"] for a in _state["engine"].list_apps() if a["name"]]
+
+        # Only when there is no connection to borrow: Qlik Sense Desktop
+        # allows one session per app, so a second socket alongside a live
+        # one is exactly what this module exists to avoid.
+        with QlikEngine() as scratch:
+            return [a["name"] for a in scratch.list_apps() if a["name"]]
+
+
+def _teardown_engine():
+    """Back to "nothing open", without letting a failed close hide why."""
+    engine_ = _state["engine"]
+    if engine_ is not None:
+        try:
+            engine_.close()
+        except Exception:
+            log.warning("Could not close the engine cleanly", exc_info=True)
+    _state["engine"] = None
+    _state["app_name"] = None
+
+
 def open_app(app_name=None):
-    """Open an app, reusing the existing connection where possible."""
+    """Open an app. Changing app starts a new session, because it must.
+
+    Qlik Sense Desktop keeps ONE document open per engine, and the engine
+    offers no way to close one - there is no CloseDoc method. The document
+    is released when the session holding it disconnects, and not before, so
+    a session that keeps the current app open makes every other app
+    unopenable: the engine refuses with "a document is already open" (1002),
+    which reads as though the app being asked for is the problem. Holding
+    the connection across a switch is what made the app impossible to
+    change; the socket goes first, and the new app opens on one of its own.
+    """
     app_name = app_name or APP_NAME
 
     with _lock:
         if connected() and _state["app_name"] == app_name:
             return _state["engine"]
+
+        previous = _state["app_name"] if connected() else None
+        if previous is not None:
+            # Filed while the app it was asked against is still the open one,
+            # so the chat is not recorded against the app replacing it.
+            reset_chat()
+            _teardown_engine()
 
         if not connected():
             _state["engine"] = QlikEngine()
@@ -110,17 +159,34 @@ def open_app(app_name=None):
         try:
             _state["engine"].open_app(app_name)
         except Exception:
-            # A half-open session is worse than none: every later call would
-            # fail against a document that was never opened.
-            if _state["engine"] is not None and _state["app_name"] is None:
-                _state["engine"].close()
-                _state["engine"] = None
+            _teardown_engine()
+            if previous is not None and previous != app_name:
+                _reopen(previous)
             raise
 
         _state["app_name"] = app_name
-        # Whatever was said before was about a different app's fields.
-        reset_chat()
+        if previous is None:
+            # Nothing was filed above, so this is the first app of the
+            # session: whatever was said before it was open was not about it.
+            reset_chat()
         return _state["engine"]
+
+
+def _reopen(app_name):
+    """Go back to the app that was open before a switch failed.
+
+    The old session had to be dropped to try the new app at all, so failing
+    without this would leave nothing open at all - a worse place than the
+    person started from, for asking for an app they could not have.
+    """
+    try:
+        _state["engine"] = QlikEngine()
+        _state["engine"].open_app(app_name)
+        _state["app_name"] = app_name
+    except Exception:
+        log.warning("Could not reopen %r after a failed switch", app_name,
+                    exc_info=True)
+        _teardown_engine()
 
 
 def ensure_open():
@@ -147,9 +213,12 @@ def close():
 # ----------------------------------------------------------------------
 
 def client():
-    if _state["client"] is None:
-        _state["client"] = ollama.Client(host=OLLAMA_HOST or None)
-    return _state["client"]
+    # The lock, like every other _state write: two first requests arriving
+    # together would otherwise each install their own client.
+    with _lock:
+        if _state["client"] is None:
+            _state["client"] = ollama.Client(host=OLLAMA_HOST or None)
+        return _state["client"]
 
 
 def model():
@@ -254,6 +323,23 @@ def load_chat(chat_id_):
     with _lock:
         if _state["chat_id"] is not None and _state["chat_id"] != chat_id_:
             persist()
+        # The saved answers are about the app they were asked against.
+        # Restoring them on top of a different open app leaves the model
+        # reasoning about the wrong data model, so switch back first - the
+        # reset that open_app does is overwritten just below.
+        wanted = record.get("app")
+        if wanted and _state["app_name"] and wanted != _state["app_name"]:
+            try:
+                open_app(wanted)
+            except Exception as e:
+                # Still load the chat - losing the transcript would be worse -
+                # but tell the caller instead of silently proceeding.
+                log.warning("Could not reopen app %r for chat %s: %s",
+                            wanted, chat_id_, e)
+                record["app_mismatch"] = (
+                    f"This chat is about the app {wanted!r}, which could not "
+                    f"be reopened: {e}"
+                )
         messages_ = record["messages"]
         # A history file written before the prompt changed - or hand-edited -
         # still has to start with the rules the tools are described by.

@@ -27,7 +27,15 @@ from chart_defaults import CHART_DEFAULTS
 # Hand-verified types. Their property trees below were copied from real,
 # confirmed-rendering objects and are used in preference to the generated
 # defaults, because they are known to work in this app.
-VERIFIED_TYPES = ("kpi", "barchart", "linechart", "piechart", "table")
+#
+# "table" used to be here and is not any more. Its hand-written tree was
+# copied from a Qlik version that has since moved on: the object still
+# computes its rows - the engine reports a full qMatrix for one - and the
+# client draws an empty pane, which is the worst way for a chart to fail.
+# The bundle's own "sn-table", built from the installed client's property
+# tree, renders the same data correctly, so the name is aliased onto it
+# below and this list is the four that are still genuinely verified.
+VERIFIED_TYPES = ("kpi", "barchart", "linechart", "piechart")
 
 # Everything Qlik ships, from chart_defaults.py. The verified five come
 # first so they stay the natural choice.
@@ -53,7 +61,14 @@ CHART_ALIASES = {
     "pivot": "sn-pivot-table",
     "pivottable": "sn-pivot-table",
     "pivot table": "sn-pivot-table",
+    # "table" is the word everyone uses, and it has to reach the object that
+    # actually draws - see VERIFIED_TYPES. Aliased rather than renamed so
+    # every existing caller, prompt and saved instruction keeps working.
+    "table": "sn-table",
     "straighttable": "sn-table",
+    "straight table": "sn-table",
+    "datatable": "sn-table",
+    "data table": "sn-table",
     "grid": "sn-grid-chart",
     "gridchart": "sn-grid-chart",
     "orgchart": "sn-org-chart",
@@ -65,7 +80,6 @@ CHART_ALIASES = {
     "box plot": "boxplot",
     "filter": "filterpane",
     "filter pane": "filterpane",
-    "distribution": "distributionplot",
 }
 
 
@@ -110,21 +124,90 @@ def describe_chart_types():
     return "; ".join(lines)
 
 
+# A pivot table is one dimension crossed against another. The bundle says it
+# accepts one, and that is true of the object: Qlik builds it, puts the single
+# dimension down the side, has nothing to lay across the top, and draws an
+# empty grid. The bundle describes what the object TOLERATES; a cross-tab with
+# nothing to cross is not a chart anyone can read, so the real minimum is two.
+#
+# Corrected here rather than at each call site because this number is the
+# assistant's own source of truth - describe_chart_types() prints it straight
+# into the prompt, so a wrong minimum here teaches the model the wrong rule
+# and every guard downstream is arguing with the catalogue.
+CROSS_TAB_TYPES = ("sn-pivot-table",)
+
+# What to build instead when a chart is created, read back, and turns out not
+# to draw. Each fallback shows the SAME data a different way rather than
+# retrying the same type: the failures behind this are property-tree bugs, so
+# rebuilding identically reproduces them exactly.
+#
+# Ordered by how close each is to the original. sn-table ends every chain
+# because it accepts any number of dimensions and measures and is the one
+# type confirmed rendering in the user's own app, so a fallback chain cannot
+# run out of options and leave nothing.
+FALLBACK_TYPES = {
+    "boxplot": ("barchart", "sn-table"),
+    "sn-grid-chart": ("sn-pivot-table", "sn-table"),
+    "mekkochart": ("sn-pivot-table", "sn-table"),
+    "treemap": ("barchart", "sn-table"),
+    "qlik-network-chart": ("sn-table",),
+    "sn-org-chart": ("sn-table",),
+    "qlik-sankey-chart-ext": ("sn-table",),
+    "qlik-funnel-chart-ext": ("barchart", "sn-table"),
+    "qlik-word-cloud": ("barchart", "sn-table"),
+    "scatterplot": ("combochart", "sn-table"),
+    "waterfallchart": ("barchart", "sn-table"),
+    "bulletchart": ("barchart", "sn-table"),
+    "gauge": ("kpi",),
+    "histogram": ("barchart", "sn-table"),
+    "piechart": ("barchart", "sn-table"),
+    "combochart": ("barchart", "sn-table"),
+    "sn-pivot-table": ("sn-table",),
+    "barchart": ("sn-table",),
+    "linechart": ("barchart", "sn-table"),
+}
+
+
+def fallback_types(chart_type, dimensions, measures):
+    """Types that could show this data instead, best match first.
+
+    Only types that actually accept this many dimensions and measures are
+    offered. A fallback the engine would refuse is not a fallback - it turns
+    one broken chart into a rejection with a confusing reason attached.
+    """
+    n_dims, n_meas = len(dimensions or []), len(measures or [])
+
+    usable = []
+    for candidate in FALLBACK_TYPES.get(chart_type, ("sn-table",)):
+        (min_d, max_d), (min_m, max_m) = chart_requirements(candidate)
+        if min_d <= n_dims <= (max_d or n_dims) and min_m <= n_meas <= (max_m or n_meas):
+            usable.append(candidate)
+
+    return usable
+
+MINIMUM_DIMENSIONS = {chart_type: 2 for chart_type in CROSS_TAB_TYPES}
+
+
 def chart_requirements(chart_type):
     """(min, max) dimensions and measures a chart type accepts.
 
-    Straight from the bundle. It is the only reason we know a scatter plot
+    Straight from the bundle, except where the bundle's minimum describes
+    what the object tolerates rather than what renders something readable -
+    see MINIMUM_DIMENSIONS. It is the only reason we know a scatter plot
     needs two measures - build one with a single measure and it cannot draw,
     which is what happened every time a model asked for one.
     """
     spec = CHART_DEFAULTS.get(chart_type)
     if not spec:
         return (0, 1000), (0, 1000)
-    return tuple(spec["dimensions"]), tuple(spec["measures"])
+
+    low, high = spec["dimensions"]
+    low = max(low, MINIMUM_DIMENSIONS.get(chart_type, 0))
+    return (low, high), tuple(spec["measures"])
 
 # Chart types whose data is grouped by a dimension. A kpi is the odd one out:
 # it is a single aggregated number with no dimension at all.
-DIMENSIONAL_TYPES = ("barchart", "linechart", "piechart", "table")
+DIMENSIONAL_TYPES = ("barchart", "linechart", "piechart", "sn-table")
 
 # Types that take no dimension at all, so asking for one is an error
 # rather than an omission.
@@ -145,7 +228,8 @@ DEFAULT_SIZES = {
     "barchart": (12, 4),
     "linechart": (12, 4),
     "piechart": (12, 4),
-    "table": (24, 6),
+    # A table's footprint comes from _WIDE_TYPES below, which already lists
+    # sn-table at full width.
 }
 
 
@@ -229,6 +313,43 @@ def colour_block(colour):
         "useBaseColors": "off",
         "persistent": True,
     }
+
+
+def _apply_generated_colour(chart_type, properties, resolved):
+    """Wire an explicit colour into a generated property tree.
+
+    Most bundles read the flat `color` block that colour_block() fills in,
+    but a few read nested paths instead: histogram colours its bars from
+    color.bar, waterfall reads color.positiveValue / color.negativeValue,
+    and boxplot keeps its whole colour block inside boxplotDef. Merging the
+    flat block into those left every nested default in place, so "make the
+    histogram red" changed nothing and reported success.
+    """
+
+    palette = {"index": -1, "color": resolved}
+
+    if chart_type == "histogram":
+        # One series of bars, no dimension: a single colour is expressible
+        # here, "multi" is not, so multi keeps the default.
+        if resolved != MULTI_COLOUR:
+            properties.setdefault("color", {}).setdefault(
+                "bar", {})["paletteColor"] = palette
+    elif chart_type == "waterfallchart":
+        # Only the rises take the requested colour: the red falls are what
+        # make a waterfall readable, and painting both the same hides which
+        # bars are falls. No dimension either, so "multi" means nothing.
+        if resolved != MULTI_COLOUR:
+            colour = properties.setdefault("color", {})
+            colour["auto"] = False
+            colour.setdefault("positiveValue", {})["paletteColor"] = palette
+    elif chart_type == "boxplot":
+        if resolved != MULTI_COLOUR:
+            colour = properties.setdefault(
+                "boxplotDef", {}).setdefault("color", {})
+            colour["auto"] = False
+            colour.setdefault("box", {})["paletteColor"] = palette
+    elif isinstance(properties.get("color"), dict):
+        properties["color"] = {**properties["color"], **colour_block(resolved)}
 
 
 # Shared by every nebula chart. Extracted from a working bar chart.
@@ -326,27 +447,12 @@ _PIE_EXTRAS = {
 }
 
 
-# sn-table renders its body by walking `columnOrder`. With no column list it
-# draws the title and an empty white pane - data present, nothing shown. This
-# is the same class of failure as the pie chart: a missing key the component
-# treats as "nothing to draw" rather than as an error. The column-indexed
-# lists here are filled in by build_properties(), which is the only place that
-# knows how many columns the hypercube has.
-_TABLE_EXTRAS = {
-    "version": "2.5.0",
-    "search": {"sorting": "auto"},
-    "totals": {"show": True, "position": "noTotals", "label": "Totals"},
-    "scrolling": {
-        "horizontal": False,
-        "keepFirstColumnInView": False,
-        "keepFirstColumnInViewTouch": False,
-    },
-    "multiline": {"wrapTextInHeaders": True, "wrapTextInCells": False},
-    "usePagination": False,
-    "enableChartExploration": False,
-    "chartExploration": {"menuVisibility": "auto"},
-    "components": [],
-}
+# A hand-written table property tree used to live here, pinned at version
+# "2.5.0" while the installed bundle had moved to 6.19.0. It built an object
+# that computed a full qMatrix and drew an empty pane - the failure it was
+# itself written to prevent. It is gone rather than repaired: the bundle
+# ships the current tree for this client, and a tree maintained by hand goes
+# stale again on the next Qlik upgrade with no test able to notice.
 
 
 def _deep_copy(value):
@@ -358,6 +464,30 @@ def _deep_copy(value):
     if isinstance(value, list):
         return [_deep_copy(v) for v in value]
     return value
+
+
+def hypercube_owner(properties):
+    """The dict that holds this chart's qHyperCubeDef, and its path.
+
+    Almost every bundle keeps the hypercube at the top of the property tree,
+    and a box plot does not: it keeps it at boxplotDef.qHyperCubeDef, and
+    reads nothing from the top level. Writing the dimensions to the top of a
+    box plot creates a cube the engine happily computes and the component
+    never looks at, so the object renders Qlik's own "Incomplete
+    visualization" while every check we run reports data.
+
+    So the bundle is asked where its cube goes rather than assumed. Returns
+    (owner_dict, path) with path for diagnostics; falls back to the top level
+    for a bundle that ships no cube at all.
+    """
+    if "qHyperCubeDef" in properties:
+        return properties, "qHyperCubeDef"
+
+    for key, value in properties.items():
+        if isinstance(value, dict) and "qHyperCubeDef" in value:
+            return value, f"{key}.qHyperCubeDef"
+
+    return properties, "qHyperCubeDef"
 
 
 def _build_from_defaults(chart_type, object_id, title, hypercube_def,
@@ -374,9 +504,10 @@ def _build_from_defaults(chart_type, object_id, title, hypercube_def,
 
     properties = _deep_copy(CHART_DEFAULTS[chart_type]["properties"])
 
-    base_cube = properties.get("qHyperCubeDef") or {}
+    owner, _path = hypercube_owner(properties)
+    base_cube = owner.get("qHyperCubeDef") or {}
     merged = {**base_cube, **hypercube_def}
-    properties["qHyperCubeDef"] = merged
+    owner["qHyperCubeDef"] = merged
 
     properties["qInfo"] = {"qId": object_id, "qType": chart_type}
     properties["visualization"] = chart_type
@@ -386,8 +517,8 @@ def _build_from_defaults(chart_type, object_id, title, hypercube_def,
     properties.setdefault("showTitles", True)
 
     resolved = resolve_colour(colour)
-    if resolved and isinstance(properties.get("color"), dict):
-        properties["color"] = {**properties["color"], **colour_block(resolved)}
+    if resolved:
+        _apply_generated_colour(chart_type, properties, resolved)
 
     # Tables render their body from a column list; without it they draw an
     # empty pane. The generated defaults ship an empty one.
@@ -457,22 +588,5 @@ def build_properties(chart_type, object_id, title, hypercube_def, subtitle="",
 
     elif chart_type == "piechart":
         properties.update(_deep_copy(_PIE_EXTRAS))
-
-    elif chart_type == "table":
-        properties.update(_deep_copy(_TABLE_EXTRAS))
-
-        columns = len(hypercube_def.get("qDimensions", [])) + len(
-            hypercube_def.get("qMeasures", [])
-        )
-        column_indexes = list(range(columns))
-
-        # Both levels matter: the property-level list drives rendering, the
-        # hypercube-level one drives which columns the engine returns.
-        properties["columnOrder"] = column_indexes
-        properties["columnWidths"] = [-1] * columns  # -1 = auto
-        hypercube_def.setdefault("qColumnOrder", column_indexes)
-        hypercube_def.setdefault("qInterColumnSortOrder", column_indexes)
-        hypercube_def.setdefault("qMode", "S")  # straight table
-        hypercube_def.setdefault("qSuppressMissing", True)
 
     return properties

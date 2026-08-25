@@ -43,6 +43,19 @@ _TIME_TAGS = {"$date", "$timestamp"}
 # financial reader spots immediately and stops trusting the tool over.
 _ADDITIVE = re.compile(r"^(sum|count)\s*\(", re.IGNORECASE)
 
+# Count(DISTINCT x) looks like a count but does not add up either: a client
+# with deposits in two regions is counted once per region, so the regional
+# counts sum past the true distinct total and every share computed against
+# that sum is overstated. DISTINCT does not have to come first - a set
+# analysis or TOTAL sits in front of it, as in
+# Count({<[Year]={'2026'}>} DISTINCT [Client]) - and a count written that
+# way adds up no straighter than the plain one.
+_COUNT_DISTINCT = re.compile(r"^count\s*\(.*\bdistinct\b", re.IGNORECASE | re.DOTALL)
+
+# Field names are quoted in brackets and are not keywords: an app with a
+# field called [Distinct Clients] is counting rows like any other.
+_BRACKETED = re.compile(r"\[[^\]]*\]")
+
 
 def _is_additive(expression):
     """True only for a single Sum or Count spanning the whole expression.
@@ -57,6 +70,8 @@ def _is_additive(expression):
     if text.startswith("="):
         text = text[1:].strip()
     if not _ADDITIVE.match(text):
+        return False
+    if _COUNT_DISTINCT.match(_BRACKETED.sub("[]", text)):
         return False
 
     depth = 0
@@ -136,6 +151,19 @@ def _ranking_facts(pairs, additive, is_time=False):
     facts["total"] = _round(total)
     if total:
         facts["highest"]["share_pct"] = _percent(top_value, total)
+
+    # A negative category shrinks the net total, so the biggest category's
+    # share of it can pass 100% - arithmetic-true, reader-false. The shares
+    # stay, but never as a bare number the model can quote unqualified.
+    negatives = sum(1 for _, value in ordered if value < 0)
+    if negatives:
+        facts["negative_categories"] = {
+            "count": negatives,
+            "note": (
+                "shares are of the net total, which negative categories "
+                "shrink - a share can exceed 100%; say so if quoting one"
+            ),
+        }
 
     # Concentration is the question a portfolio or deposit book is actually
     # read for: how much of the book sits in a handful of names. It says
@@ -298,10 +326,14 @@ def analyse_sheet(engine, sheet=None, chart_ids=None):
     if chart_ids:
         wanted = set(chart_ids)
         selected = [c for c in charts if c.get("id") in wanted]
-        title = None
         missing = sorted(wanted - {c.get("id") for c in selected})
         if not selected:
             return {"error": f"No chart matches {', '.join(missing)}."}
+        # The summary names the sheet it read; None here looks like a bug to
+        # the model and gets echoed to the reader. Name the charts' own
+        # sheet(s) when they have any, and say so plainly when they don't.
+        sheets = sorted({c["sheet"] for c in selected if c.get("sheet")})
+        title = ", ".join(sheets) if sheets else "(charts not on any sheet)"
     else:
         by_sheet = {}
         for chart in charts:
@@ -324,10 +356,14 @@ def analyse_sheet(engine, sheet=None, chart_ids=None):
             title = match
         else:
             # list_charts walks the app in creation order, so the sheet whose
-            # charts appear last is the one most recently built.
-            title = charts[-1].get("sheet") or sorted(by_sheet)[-1]
-            if title not in by_sheet:
-                title = sorted(by_sheet)[-1]
+            # charts appear last is the one most recently built. A trailing
+            # chart with no sheet says nothing about recency, so the walk
+            # continues backwards to the last chart that has one - falling
+            # back to the alphabetically last name would present an arbitrary
+            # sheet as the one just built.
+            title = next(
+                c["sheet"] for c in reversed(charts) if c.get("sheet") in by_sheet
+            )
 
         selected = by_sheet[title]
         missing = []
@@ -426,6 +462,14 @@ def add_shares(engine, result, dimensions=None, measures=None):
 
     for row, value in zip(rows, values):
         row["share_pct"] = _percent(value, total)
+
+    # Same trap as in _ranking_facts: a negative row shrinks the net total,
+    # so another row's share of it can pass 100% or a share can flip sign.
+    if any(value < 0 for value in values):
+        result["negative_values_note"] = (
+            "Some rows are negative, so shares are of the net total and can "
+            "exceed 100% or be negative - qualify any share you quote."
+        )
 
     result["total"] = _round(total)
     return result

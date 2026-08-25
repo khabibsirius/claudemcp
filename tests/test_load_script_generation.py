@@ -49,6 +49,12 @@ class TestSingleSource:
     def test_references_the_lib_path(self):
         assert "[lib://dataset/sales.csv]" in script_for([SALES])
 
+    def test_a_bracket_in_the_path_is_escaped(self):
+        """An unescaped ] closed the FROM clause mid-path and the statement
+        failed to parse."""
+        source = dict(SALES, path="sales]v2.csv")
+        assert "FROM [lib://dataset/sales]]v2.csv]" in script_for([source])
+
     def test_has_a_terminated_from_clause(self):
         script = script_for([SALES])
         assert "embedded labels" in script
@@ -72,6 +78,12 @@ class TestCleaning:
     def test_multiple_null_tokens_nest(self):
         script = script_for([SALES], trim_text=False, null_tokens=["N/A", "-"])
         assert "'N/A'" in script and "'-'" in script
+
+    def test_a_null_token_with_an_apostrophe_is_escaped(self):
+        """A raw n'a ended the Qlik literal early and broke the script."""
+        script = script_for([SALES], trim_text=False, null_tokens=["n'a"])
+        assert "'n''a'" in script
+        assert "'n'a'" not in script
 
     def test_drop_fields_removes_a_column(self):
         script = script_for([SALES], drop_fields=["Amount"])
@@ -152,6 +164,15 @@ class TestNumericColumnsAreNotTrimmed:
         source["sample_rows"] = [{"Amount": ""}, {"Amount": ""}]
         assert "Trim([Amount])" in script_for([source])
 
+    @pytest.mark.parametrize("value", ["nan", "inf", "-Infinity", "1_000"])
+    def test_pythonisms_qlik_reads_as_text_are_treated_as_text(self, value):
+        """float() accepts these but Qlik does not, so the column is really
+        text and skipping Trim() would leave it uncleaned."""
+        source = dict(self.TYPED)
+        source["columns"] = ["Amount"]
+        source["sample_rows"] = [{"Amount": "1.5"}, {"Amount": value}]
+        assert "Trim([Amount])" in script_for([source])
+
 
 class TestConcatenate:
     """'Merge these files' when they share a shape."""
@@ -174,6 +195,15 @@ class TestConcatenate:
         script = script_for([SALES, RETURNS], mode="concatenate", table_name="AllOrders")
         assert "[AllOrders]:" in script
         assert "CONCATENATE ([AllOrders])" in script
+
+    def test_a_nameless_first_source_gets_a_real_default_not_none(self):
+        """A first source without 'table' produced a table literally named
+        None, and CONCATENATE ([None]) with it."""
+        nameless = {k: v for k, v in SALES.items() if k != "table"}
+        script = script_for([nameless, RETURNS], mode="concatenate")
+        assert "[None]" not in script
+        assert "[Data]:" in script
+        assert "CONCATENATE ([Data])" in script
 
     def test_both_files_are_loaded(self):
         script = script_for([SALES, RETURNS], mode="concatenate")
@@ -211,8 +241,11 @@ class TestValidation:
         with pytest.raises(ValueError, match="separate"):
             generate_load_script([SALES], mode="merge")
 
-    def test_no_sources_yields_an_empty_script(self):
-        assert generate_load_script([])["script"].strip() == ""
+    def test_no_sources_is_an_error_not_a_silent_empty_script(self):
+        """An empty script written into a tab looks like success while
+        loading nothing at all."""
+        with pytest.raises(ValueError, match="sources"):
+            generate_load_script([])
 
 
 class TestScriptIsUsableAsATab:

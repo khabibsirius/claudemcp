@@ -82,7 +82,7 @@ class Chart(BaseModel):
         description=(
             "Exact field name to group by, unbracketed, e.g. 'Customer Segment'. "
             "Must be left empty for 'kpi'. Prefer a field with few distinct "
-            "values - see qlik_data_model."
+            "values - see the qlik://fields resource."
         ),
     )
     measure_expression: str = Field(
@@ -158,7 +158,8 @@ def qlik_open(app: str = "") -> dict:
     Call with no argument to list the apps available. Otherwise pass an app's
     title, filename or id. Returns how much data is loaded and how many
     sheets exist, so you know whether the app needs data loading (see
-    qlik_data_sources) or is ready to chart (see qlik_data_model).
+    qlik_data_sources) or is ready to chart (see the qlik://fields
+    resource).
 
     This must be the first call - every other tool works on the open app."""
 
@@ -287,7 +288,10 @@ def qlik_build_sheet(
         designed_by = "caller"
     else:
         if not (instruction or title):
-            raise QlikEngineError(
+            # The caller's mistake, not an engine failure. FastMCP surfaces
+            # either as the tool's error text, but local callers catch
+            # QlikEngineError as "Qlik broke" - which this is not.
+            raise ValueError(
                 "Say what you want: either instruction='sales by region, 4 charts' "
                 "to have the local model design it, or charts=[...] to specify it."
             )

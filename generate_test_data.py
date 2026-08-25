@@ -220,12 +220,12 @@ def generate(out_dir, accounts, months, branches, clients, seed):
     product_rows = build_products()
     client_rows, client_agents = build_clients(clients)
 
-    write_csv(os.path.join(out_dir, "branches.csv"), branch_rows,
-              list(branch_rows[0]))
-    write_csv(os.path.join(out_dir, "products.csv"), product_rows,
-              list(product_rows[0]))
-    write_csv(os.path.join(out_dir, "clients.csv"), client_rows,
-              list(client_rows[0]))
+    branches_size = write_csv(os.path.join(out_dir, "branches.csv"),
+                              branch_rows, list(branch_rows[0]))
+    products_size = write_csv(os.path.join(out_dir, "products.csv"),
+                              product_rows, list(product_rows[0]))
+    clients_size = write_csv(os.path.join(out_dir, "clients.csv"),
+                             client_rows, list(client_rows[0]))
 
     dates = month_ends(2024, 1, months)
 
@@ -340,15 +340,15 @@ def generate(out_dir, accounts, months, branches, clients, seed):
 
     return {
         "deposits.csv": (written, os.path.getsize(path)),
-        "clients.csv": (len(client_rows), 0),
-        "branches.csv": (len(branch_rows), 0),
-        "products.csv": (len(product_rows), 0),
+        "clients.csv": (len(client_rows), clients_size),
+        "branches.csv": (len(branch_rows), branches_size),
+        "products.csv": (len(product_rows), products_size),
     }
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--out", default=r"C:\Users\Hacker\Documents\1\bigdata",
+    parser.add_argument("--out", default="./test_data",
                         help="folder to write into (must be reachable by a Qlik connection)")
     parser.add_argument("--accounts", type=int, default=45_000)
     parser.add_argument("--months", type=int, default=30,

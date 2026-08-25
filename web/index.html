@@ -39,9 +39,9 @@
     --green: #1db26b; --green-dark: #17995b; --green-soft: #10281c;
     --bg: #14161a; --surface: #1c1f24; --raised: #22262c;
     --line: #30353d; --line-soft: #272b32;
-    --ink: #e6e9ed; --muted: #9aa3ad; --faint: #6b747f;
+    --ink: #e6e9ed; --muted: #e8e0e0; --faint: #6b747f;
     --accent: #5aa3cf; --accent-soft: #16232c;
-    --bad: #e26d5c; --bad-soft: #33201c;
+    --bad: #cc0808; --bad-soft: #33201c;
     --chip: #262b32; --you-bubble: #123324; --bot-bubble: #242930;
     --shadow: 0 1px 2px rgba(0, 0, 0, .4);
     --code-bg: #191c21; --gutter-bg: #1c2026;
@@ -156,6 +156,15 @@
   }
   button.primary:hover:not(:disabled) { background: var(--green-dark); border-color: var(--green-dark); }
   button:disabled { opacity: .55; cursor: not-allowed; }
+
+  /* Send doubles as Stop while a turn streams. Red because it is the same
+     button in the same place as the green Send, so colour is the only thing
+     telling them apart at a glance. --bad already carries its own
+     dark-theme value, and brightness() darkens the hover in both themes
+     without a second variable to keep in step with it. */
+  button.primary.stopping,
+  button.primary.stopping:hover { background: var(--bad); border-color: var(--bad); }
+  button.primary.stopping:hover { filter: brightness(.92); }
 
   /* Busy state for Load data: a small conic spinner replaces intent. */
   button .spin {
@@ -291,7 +300,7 @@
   .chat-item { position: relative; display: flex; }
   .chat-item .open {
     flex: 1; min-width: 0; text-align: left; border: 1px solid transparent;
-    background: transparent; padding: 6px 26px 6px 8px; border-radius: 7px;
+    background: transparent; padding: 6px 48px 6px 8px; border-radius: 7px;
     display: flex; flex-direction: column; gap: 1px; font-weight: 500;
   }
   .chat-item .open:hover { background: var(--chip); border-color: var(--line); }
@@ -303,14 +312,18 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .chat-item .m { font-size: 10.5px; color: var(--faint); }
-  .chat-item .del {
-    position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  .chat-item .del, .chat-item .rename {
+    position: absolute; top: 50%; transform: translateY(-50%);
     border: 0; background: transparent; color: var(--faint);
     font-size: 15px; line-height: 1; padding: 3px 6px; border-radius: 5px;
     opacity: 0; transition: opacity .12s;
   }
-  .chat-item:hover .del, .chat-item .del:focus-visible { opacity: 1; }
+  .chat-item .del { right: 4px; }
+  .chat-item .rename { right: 26px; font-size: 12px; }
+  .chat-item:hover .del, .chat-item .del:focus-visible,
+  .chat-item:hover .rename, .chat-item .rename:focus-visible { opacity: 1; }
   .chat-item .del:hover { color: var(--bad); background: var(--bad-soft); }
+  .chat-item .rename:hover { color: var(--ink); background: var(--chip); }
 
   /* Before the first message the input is the main event, not a strip at
      the bottom of the screen: welcome, suggestions and the box sit together
@@ -321,7 +334,7 @@
   .chat.empty .log .msg { max-width: 760px; }
   .chat.empty form { border-top: 0; }
   .chat.empty form, .chat.empty .chips, .chat.empty .hint { max-width: 792px; }
-  .chat.empty input { padding: 13px 17px; font-size: 15px; }
+  .chat.empty textarea { padding: 13px 17px; font-size: 15px; }
   .chat .log { flex: 1; overflow: auto; padding: 16px 18px 8px; }
 
   .msg { margin: 0 auto 14px; max-width: 980px; animation: rise .18s ease-out; }
@@ -452,17 +465,20 @@
   .chips button:hover:not(:disabled) { color: var(--ink); border-color: var(--green); }
 
   .chat form { display: flex; gap: 9px; padding: 10px 18px 6px;
-               border-top: 1px solid var(--line-soft);
+               border-top: 1px solid var(--line-soft); align-items: flex-end;
                max-width: 1016px; margin: 0 auto; width: 100%; }
-  .chat input {
+  .chat textarea {
     flex: 1; font: inherit; padding: 10px 14px;
     border: 1.5px solid color-mix(in srgb, var(--muted) 40%, var(--line));
     border-radius: 10px; outline: none;
     background: var(--bg); color: var(--ink);
     transition: border-color .15s, box-shadow .15s;
+    /* One line to start with, growing as the question does and stopping a
+       few lines in - past that it would push the conversation off screen. */
+    resize: none; overflow-y: auto; line-height: 1.45; max-height: 160px;
   }
-  .chat input::placeholder { color: var(--faint); }
-  .chat input:focus {
+  .chat textarea::placeholder { color: var(--faint); }
+  .chat textarea:focus {
     border-color: var(--green);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 18%, transparent);
   }
@@ -533,8 +549,8 @@
       <div class="log" id="log"></div>
       <div class="chips" id="chips"></div>
       <form id="chatForm">
-        <input id="chatInput" autocomplete="off" data-i18n-ph="askPlaceholder"
-               placeholder="Ask for anything: load the csvs in my downloads folder and merge them / build me a sales dashboard / what is total sales by market?">
+        <textarea id="chatInput" rows="1" autocomplete="off" data-i18n-ph="askPlaceholder"
+               placeholder="Ask for anything: load the csvs in my downloads folder and merge them / build me a sales dashboard / what is total sales by market?"></textarea>
         <button class="primary" id="btnSend" data-i18n="send">Send</button>
       </form>
       <div class="hint" id="chatHint">One box for everything — loading, cleaning, dashboards,
@@ -585,6 +601,9 @@ const STRINGS = {
     dragTitle: "Drag to resize · double-click to reset",
     loading: "Loading…",
     send: "Send",
+    stop: "Stop",
+    stopped: "Stopped.",
+    stoppedKept: "Stopped. Anything already done is still there.",
     askPlaceholder: "Ask for anything: load the csvs in my downloads folder and merge them / build me a sales dashboard / what is total sales by market?",
     askPlaceholderOffline: "Assistant unavailable - start Ollama, then just type here again.",
     hint: "One box for everything - loading, cleaning, dashboards, questions. The assistant writes the script; you press Load data to run it.",
@@ -597,10 +616,13 @@ const STRINGS = {
       "Add Year and Month columns from the date field",
     ],
     noConnections: "None yet — ask the assistant to add a folder as a data source.",
+    askConnection: "What files are in the {name} connection?",
     noChats: "No saved chats yet — ask something and this one saves itself.",
     untitled: "Untitled",
     turns: "{n} turns",
     turnOne: "1 turn",
+    renameChatTitle: "Rename this chat",
+    renamePrompt: "Name for this chat:",
     deleteChatTitle: "Delete this chat",
     deleteConfirm: "Delete \"{title}\"? This cannot be undone.",
     thisChat: "this chat",
@@ -630,6 +652,7 @@ const STRINGS = {
     couldNotOpenChat: "Could not open that chat: {error}",
     couldNotStartChat: "Could not start a new chat: {error}",
     couldNotDeleteChat: "Could not delete that chat: {error}",
+    couldNotRenameChat: "Could not rename that chat: {error}",
     cloudModelConfirm: "This is a cloud model. Field names, sample values and query results will be sent to Ollama's servers instead of staying on this machine.\n\nContinue?",
     qlikCacheNote: "Saved to the app file{stamp}. Qlik Sense Desktop won't show new sheets in a window that already had this app open — close the app in Qlik and open it again. Don't press Save in Qlik first: its older copy would overwrite this.",
   },
@@ -657,6 +680,9 @@ const STRINGS = {
     dragTitle: "Потяните, чтобы изменить размер · двойной щелчок — сброс",
     loading: "Загрузка…",
     send: "Отправить",
+    stop: "Стоп",
+    stopped: "Остановлено.",
+    stoppedKept: "Остановлено. Всё, что уже сделано, осталось на месте.",
     askPlaceholder: "Спросите что угодно: загрузите csv из папки загрузок и объедините их / постройте дашборд по продажам / какова сумма продаж по рынкам?",
     askPlaceholderOffline: "Ассистент недоступен — запустите Ollama и напишите снова.",
     hint: "Одно поле для всего — загрузка, очистка, дашборды, вопросы. Ассистент пишет скрипт; вы нажимаете «Загрузить данные».",
@@ -669,10 +695,13 @@ const STRINGS = {
       "Добавьте столбцы Год и Месяц из поля даты",
     ],
     noConnections: "Пока нет — попросите ассистента добавить папку как источник данных.",
+    askConnection: "Какие файлы есть в подключении {name}?",
     noChats: "Сохранённых чатов пока нет — задайте вопрос, и этот сохранится сам.",
     untitled: "Без названия",
     turns: "реплик: {n}",
     turnOne: "реплик: 1",
+    renameChatTitle: "Переименовать этот чат",
+    renamePrompt: "Название чата:",
     deleteChatTitle: "Удалить этот чат",
     deleteConfirm: "Удалить «{title}»? Это необратимо.",
     thisChat: "этот чат",
@@ -702,6 +731,7 @@ const STRINGS = {
     couldNotOpenChat: "Не удалось открыть чат: {error}",
     couldNotStartChat: "Не удалось начать новый чат: {error}",
     couldNotDeleteChat: "Не удалось удалить чат: {error}",
+    couldNotRenameChat: "Не удалось переименовать чат: {error}",
     cloudModelConfirm: "Это облачная модель. Имена полей, примеры значений и результаты запросов будут отправлены на серверы Ollama, а не останутся на этой машине.\n\nПродолжить?",
     qlikCacheNote: "Сохранено в файл приложения{stamp}. Qlik Sense Desktop не покажет новые листы в окне, где это приложение уже было открыто — закройте его в Qlik и откройте заново. Не нажимайте сначала «Сохранить» в Qlik: его старая копия перезапишет эту.",
   },
@@ -729,6 +759,9 @@ const STRINGS = {
     dragTitle: "O'lchamini o'zgartirish uchun torting · ikki marta bosing — asliga qaytadi",
     loading: "Yuklanmoqda…",
     send: "Yuborish",
+    stop: "To'xtatish",
+    stopped: "To'xtatildi.",
+    stoppedKept: "To'xtatildi. Allaqachon bajarilgan ishlar joyida qoldi.",
     askPlaceholder: "Xohlagan narsangizni so'rang: yuklamalar papkasidagi csv fayllarni yuklab birlashtiring / savdo bo'yicha dashbord tuzing / bozorlar bo'yicha jami savdo qancha?",
     askPlaceholderOffline: "Assistent mavjud emas — Ollama'ni ishga tushiring va qaytadan yozing.",
     hint: "Hammasi uchun bitta maydon — yuklash, tozalash, dashbordlar, savollar. Assistent skript yozadi; siz «Ma'lumotni yuklash» tugmasini bosasiz.",
@@ -741,10 +774,13 @@ const STRINGS = {
       "Sana maydonidan Yil va Oy ustunlarini qo'shing",
     ],
     noConnections: "Hozircha yo'q — assistentdan papkani ma'lumot manbai sifatida qo'shishni so'rang.",
+    askConnection: "{name} ulanishida qanday fayllar bor?",
     noChats: "Saqlangan suhbatlar yo'q — biror narsa so'rang, bu suhbat o'zi saqlanadi.",
     untitled: "Nomsiz",
     turns: "{n} ta almashinuv",
     turnOne: "1 ta almashinuv",
+    renameChatTitle: "Bu suhbat nomini o'zgartirish",
+    renamePrompt: "Suhbat nomi:",
     deleteChatTitle: "Bu suhbatni o'chirish",
     deleteConfirm: "«{title}» o'chirilsinmi? Buni qaytarib bo'lmaydi.",
     thisChat: "bu suhbat",
@@ -774,14 +810,18 @@ const STRINGS = {
     couldNotOpenChat: "Suhbatni ochib bo'lmadi: {error}",
     couldNotStartChat: "Yangi suhbat boshlab bo'lmadi: {error}",
     couldNotDeleteChat: "Suhbatni o'chirib bo'lmadi: {error}",
+    couldNotRenameChat: "Suhbat nomini o'zgartirib bo'lmadi: {error}",
     cloudModelConfirm: "Bu bulutli model. Maydon nomlari, namuna qiymatlar va so'rov natijalari shu kompyuterda qolmasdan Ollama serverlariga yuboriladi.\n\nDavom etilsinmi?",
     qlikCacheNote: "Ilova fayliga saqlandi{stamp}. Qlik Sense Desktop bu ilova ochiq turgan oynada yangi varaqlarni ko'rsatmaydi — ilovani Qlik'da yopib, qaytadan oching. Avval Qlik'da «Saqlash» tugmasini bosmang: uning eski nusxasi buni o'chirib yuboradi.",
   },
 };
 
 // The browser's own preference is a better first guess than English, and the
-// choice is remembered per machine afterwards.
-let lang = localStorage.getItem("qlik-ai-lang") || "";
+// choice is remembered per machine afterwards. Guarded like the theme code:
+// with site data blocked the accessor itself throws, and an exception here
+// runs at top level - the whole UI script dies with it.
+let lang = "";
+try { lang = localStorage.getItem("qlik-ai-lang") || ""; } catch (_) {}
 if (!STRINGS[lang]) {
   const guess = (navigator.language || "en").slice(0, 2).toLowerCase();
   lang = STRINGS[guess] ? guess : "en";
@@ -907,7 +947,7 @@ function renderConnections(connections) {
     sub.textContent = connection.type || "";
     item.textContent = connection.name;
     item.appendChild(sub);
-    item.onclick = () => ask(`what files are in the ${connection.name} connection?`);
+    item.onclick = () => ask(t("askConnection", {name: connection.name}));
     box.appendChild(item);
   });
 }
@@ -1203,6 +1243,12 @@ function addMessage(role, body) {
 
 let chatId = null;
 
+// The turn currently streaming, or null. One at a time, so one controller is
+// enough. Declared up here with the other page-wide state because load() and
+// the submit handler both read it, and both can run before the chat section
+// further down has been reached.
+let turn = null;
+
 // Coarse on purpose: the exact minute a chat was last touched is never the
 // question, only roughly how long ago it was.
 function ago(iso) {
@@ -1250,6 +1296,16 @@ function renderHistory(chats, activeId) {
     open.append(title, meta);
     open.onclick = () => openChat(chat.id);
 
+    const rename = document.createElement("button");
+    rename.type = "button";
+    rename.className = "rename";
+    rename.textContent = "✎";
+    rename.title = t("renameChatTitle");
+    rename.onclick = event => {
+      event.stopPropagation();
+      renameChat(chat.id, chat.title);
+    };
+
     const del = document.createElement("button");
     del.type = "button";
     del.className = "del";
@@ -1260,7 +1316,7 @@ function renderHistory(chats, activeId) {
       removeChat(chat.id, chat.title);
     };
 
-    row.append(open, del);
+    row.append(open, rename, del);
     box.appendChild(row);
   }
 }
@@ -1289,10 +1345,23 @@ async function refreshHistory() {
 async function openChat(id) {
   if (id === chatId) return;
   try {
-    const chat = await api("/api/chats/" + encodeURIComponent(id));
+    // POST: opening switches the server's live conversation, and a GET
+    // that mutates gets prefetched by the browser into surprise switches.
+    const chat = await api("/api/chats/" + encodeURIComponent(id) + "/open",
+                           {method: "POST"});
     chatId = chat.chat_id;
     repaint(chat.transcript);
-    // Reopening moves the chat you left up the list, so re-read the order.
+    // The chat's app could not be reopened: the transcript is back, but
+    // the answers are about a different app than the one open now.
+    if (chat.warning) setStatus(chat.warning, "bad");
+    if (chat.app_switched) {
+      // Opening the chat switched back to the app it was about, so the
+      // editor needs that app's script and tabs, not just the transcript.
+      await load();
+      return;
+    }
+    // Re-read so the highlight lands on the chat now open. The order itself
+    // no longer changes: visiting a chat does not re-date it.
     await refreshHistory();
   } catch (e) {
     setStatus(t("couldNotOpenChat", {error: e.message}), "bad");
@@ -1307,6 +1376,23 @@ async function newChat() {
     $("chatInput").focus();
   } catch (e) {
     setStatus(t("couldNotStartChat", {error: e.message}), "bad");
+  }
+}
+
+// Renaming touches the name and nothing else: the chat keeps its place in
+// the list, because it is ordered by when it was last talked in.
+async function renameChat(id, current) {
+  const title = prompt(t("renamePrompt"), current || "");
+  if (title === null || !title.trim()) return;
+  try {
+    const result = await api("/api/chats/" + encodeURIComponent(id), {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({title}),
+    });
+    renderHistory(result.chats, result.chat_id);
+  } catch (e) {
+    setStatus(t("couldNotRenameChat", {error: e.message}), "bad");
   }
 }
 
@@ -1357,6 +1443,10 @@ function renderOptions(options) {
       model.name, false, model.name === options.model
     );
     option.disabled = !model.usable;
+    // Carried as data rather than read back out of the label: the ☁ prefix
+    // is display text, and sniffing it breaks the moment the label is
+    // reworded or a model name happens to start the same way.
+    if (model.cloud) option.dataset.cloud = "1";
     modelSel.appendChild(option);
   });
 }
@@ -1385,8 +1475,8 @@ $("appSel").onchange = event => {
   select({app: event.target.value});
 };
 $("modelSel").onchange = event => {
-  const chosen = event.target.selectedOptions[0].textContent;
-  if (chosen.startsWith("☁") && !confirm(t("cloudModelConfirm"))) {
+  const chosen = event.target.selectedOptions[0];
+  if (chosen.dataset.cloud && !confirm(t("cloudModelConfirm"))) {
     load();
     return;
   }
@@ -1411,7 +1501,13 @@ async function load() {
   // The server kept the conversation across the refresh; put it back on
   // screen rather than greeting someone mid-chat with an empty log.
   chatId = state.chat_id || null;
-  repaint(state.transcript);
+  // Not while a turn is streaming. repaint() empties the log and rebuilds it
+  // from the server's transcript, and this turn is not in that transcript
+  // yet - it is persisted when it finishes. Mid-stream that erases the
+  // question and the half-written answer, and leaves the stream writing into
+  // a node no longer in the page, so the reply never appears at all.
+  // Switching language is the way in: it calls load() to repaint the chrome.
+  if (!turn) repaint(state.transcript);
   refreshHistory();
   try {
     renderOptions(await api("/api/options"));
@@ -1498,7 +1594,9 @@ async function ask(question) {
   scroll();
   const stream = streamBody(body, scroll);
 
-  $("btnSend").disabled = true;
+  // The button becomes Stop for the duration. A local model can run for
+  // minutes, and a question sent by accident otherwise has to be waited out.
+  setSending(true);
   let answer = "";
   let chip = null;
   const done = [];
@@ -1508,6 +1606,7 @@ async function ask(question) {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({message: question}),
+      signal: turn.signal,
     });
     if (!response.ok) throw new Error(response.statusText);
 
@@ -1565,20 +1664,85 @@ async function ask(question) {
       }
     }
   } catch (e) {
-    setBody(body, "Error: " + e.message, false);
+    // Aborting a fetch rejects it, which is not a failure worth showing as
+    // one - the user asked for it. What they do need is to see that what ran
+    // before they pressed Stop is still on the sheet.
+    if (e.name === "AbortError") {
+      // Only mention what survived if something actually ran. Telling
+      // someone their work is safe after a turn that did nothing but type
+      // reads as though it built something and hid it.
+      stream.set(
+        (answer ? answer + "\n\n" : "") + t(done.length ? "stoppedKept" : "stopped")
+      );
+    } else {
+      setBody(body, "Error: " + e.message, false);
+    }
   } finally {
     if (!done.length) acts.remove();
-    $("btnSend").disabled = false;
+    setSending(false);
     $("chatInput").focus();
   }
 }
 
+function setSending(sending) {
+  const button = $("btnSend");
+  // Cleared on the way out as well as set on the way in: the form's submit
+  // handler reads this to decide whether it is sending or stopping, so a
+  // stale controller would leave the button stopping a turn that had
+  // already finished.
+  turn = sending ? new AbortController() : null;
+  button.textContent = sending ? t("stop") : t("send");
+  button.dataset.i18n = sending ? "stop" : "send";
+  button.classList.toggle("stopping", sending);
+  // Never disabled now: disabling it was what made a mistyped question
+  // something you had to sit through.
+  button.disabled = false;
+}
+
+function stopTurn() {
+  if (turn) turn.abort();
+}
+
+// The box is a textarea so a question can have more than one line in it -
+// an <input> cannot hold a newline at all. A textarea does not submit on
+// Enter by itself, so the two keys are wired up here: Enter sends, and
+// Shift+Enter does what it does everywhere else and breaks the line.
+function submitQuestion() {
+  // Enter during a turn would start a second one, which the server
+  // serialises on its own lock - so the question sits there looking ignored
+  // until the first finishes. Stop first, then ask.
+  if (turn) return;
+  const box = $("chatInput");
+  const question = box.value.trim();
+  if (!question) return;
+  box.value = "";
+  growInput();
+  ask(question);
+}
+
+// Grown to fit rather than scrolled: a question worth typing over several
+// lines is worth being able to read back before sending it.
+function growInput() {
+  const box = $("chatInput");
+  box.style.height = "auto";
+  box.style.height = Math.min(box.scrollHeight, 160) + "px";
+}
+
+$("chatInput").addEventListener("input", growInput);
+
+$("chatInput").addEventListener("keydown", event => {
+  // isComposing: mid-composition Enter is the IME accepting a character,
+  // not the person sending - and this interface is used in three languages.
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+  event.preventDefault();
+  submitQuestion();
+});
+
 $("chatForm").onsubmit = event => {
   event.preventDefault();
-  const question = $("chatInput").value.trim();
-  if (!question) return;
-  $("chatInput").value = "";
-  ask(question);
+  // The same button does both jobs, so which one depends on whether a turn
+  // is in flight. Submitting while streaming means Stop.
+  if (turn) stopTurn(); else submitQuestion();
 };
 
 // ----------------------------------------------------------------------
@@ -1675,7 +1839,7 @@ $("langSel").value = lang;
 
 $("langSel").onchange = event => {
   lang = event.target.value;
-  localStorage.setItem("qlik-ai-lang", lang);
+  try { localStorage.setItem("qlik-ai-lang", lang); } catch (_) {}
   applyLanguage();
   pinLanguage();
   // load() repaints the parts built from templates - chips, the hint, the
@@ -1687,8 +1851,11 @@ $("langSel").onchange = event => {
 // told otherwise; this is the telling. Failing to reach the server costs the
 // assistant's language, not the interface's, so it is not fatal.
 function pinLanguage() {
-  api("/api/select", {method: "POST", body: JSON.stringify({language: lang})})
-    .catch(e => console.warn("Could not pin the assistant's language:", e));
+  api("/api/select", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({language: lang}),
+  }).catch(e => console.warn("Could not pin the assistant's language:", e));
 }
 
 applyLanguage();

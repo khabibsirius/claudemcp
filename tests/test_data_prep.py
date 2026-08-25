@@ -49,6 +49,16 @@ class TestQualityFindings:
         assert findings[0]["issue"] == "sparse"
         assert "700" in findings[0]["detail"]  # 70% of 1000 rows null
 
+    def test_sparse_detail_without_a_null_count_does_not_invent_one(self):
+        """The engine can supply density alone; the defaulted count produced
+        'null in 0 of 1,000 rows (60.0%)', which contradicts itself."""
+        f = field("Notes", density=0.4)
+        del f["null_count"]
+        findings = analyse_tables([table(fields=[f])])
+
+        assert " 0 of " not in findings[0]["detail"]
+        assert "60.0%" in findings[0]["detail"]
+
     def test_sparse_suggestion_names_the_field(self):
         findings = analyse_tables([table(fields=[field("Notes", density=0.3)])])
         assert "[Notes]" in findings[0]["suggestion"]

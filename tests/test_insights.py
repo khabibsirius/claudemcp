@@ -6,6 +6,8 @@ worded percentage that is wrong - which is worse than no percentage, because
 they have no way to check it.
 """
 
+import pytest
+
 import insights
 from insights import analyse_chart, analyse_sheet
 
@@ -113,10 +115,39 @@ def test_an_average_gets_no_total_and_no_share():
 
 
 def test_count_and_sum_are_both_additive():
-    for expression in ("Sum([SUM])", "=Sum([SUM])", "Count(DISTINCT [Id])", "  count([Id])"):
+    for expression in ("Sum([SUM])", "=Sum([SUM])", "Count([Id])", "  count([Id])"):
         assert insights._is_additive(expression), expression
     for expression in ("Avg([SUM])", "Min([SUM])", "Sum([A])/Sum([B])", "", None):
         assert not insights._is_additive(expression), expression
+
+
+def test_count_distinct_is_not_additive():
+    """A client with deposits in two regions is counted once per region, so
+    regional Count(DISTINCT ClientID)s sum past the true client total and
+    every share of that sum is overstated."""
+    for expression in (
+        "Count(DISTINCT [ClientID])",
+        "count( distinct ClientID )",
+        "=Count(Distinct [ClientID])",
+    ):
+        assert not insights._is_additive(expression), expression
+
+
+def test_negative_categories_flag_their_shares():
+    """80 next to -20 makes the top share 133.3% - arithmetic-true and
+    reader-false, so the share never travels without the flag."""
+    mixed = [("Almaty", 80.0), ("Astana", -20.0)]
+    engine = FakeEngine(rows={"Region": rows_for("Region", mixed)})
+    facts = analyse_chart(engine, chart())["facts"]
+
+    assert facts["total"] == 60.0
+    assert facts["highest"]["share_pct"] == 133.3
+    assert facts["negative_categories"]["count"] == 1
+
+
+def test_all_positive_categories_carry_no_negative_flag():
+    engine = FakeEngine(rows={"Region": rows_for("Region", REGIONS)})
+    assert "negative_categories" not in analyse_chart(engine, chart())["facts"]
 
 
 # -- time ---------------------------------------------------------------
@@ -263,6 +294,20 @@ def test_no_sheet_named_means_the_one_built_last():
     assert analyse_sheet(engine)["sheet"] == "Just Built"
 
 
+def test_a_trailing_unplaced_chart_does_not_pick_the_alphabetically_last_sheet():
+    """The fallback used sorted()[-1], presenting whichever sheet sorted last
+    as 'the one just built' whenever the newest object had no sheet."""
+    engine = FakeEngine(
+        charts=[
+            chart(sheet="Zzz Archive", id="c1"),
+            chart(sheet="Just Built", id="c2"),
+            chart(sheet=None, id="c3"),
+        ],
+        rows={"Region": rows_for("Region", REGIONS)},
+    )
+    assert analyse_sheet(engine)["sheet"] == "Just Built"
+
+
 def test_specific_chart_ids_win_over_the_sheet():
     engine = FakeEngine(
         charts=[chart(id="c1", title="A"), chart(id="c2", title="B")],
@@ -271,6 +316,23 @@ def test_specific_chart_ids_win_over_the_sheet():
     result = analyse_sheet(engine, chart_ids=["c2"])
 
     assert [c["chart"] for c in result["charts"]] == ["B"]
+
+
+def test_chart_ids_still_name_the_sheet_they_live_on():
+    """summary['sheet']=None looked like a bug and got echoed to the reader."""
+    engine = FakeEngine(
+        charts=[chart(id="c1", sheet="Deposits"), chart(id="c2", sheet="Deposits")],
+        rows={"Region": rows_for("Region", REGIONS)},
+    )
+    assert analyse_sheet(engine, chart_ids=["c1", "c2"])["sheet"] == "Deposits"
+
+
+def test_chart_ids_on_no_sheet_say_so_rather_than_none():
+    engine = FakeEngine(
+        charts=[chart(id="c1", sheet=None)],
+        rows={"Region": rows_for("Region", REGIONS)},
+    )
+    assert analyse_sheet(engine, chart_ids=["c1"])["sheet"] == "(charts not on any sheet)"
 
 
 def test_an_empty_app_says_so_instead_of_raising():
@@ -419,6 +481,19 @@ def test_no_share_when_the_real_total_cannot_be_read():
     assert "top 1 of 20" in result["note"]
 
 
+def test_negative_rows_carry_a_warning_beside_their_shares():
+    """A negative row shrinks the net total, so another row's share of it
+    passes 100% - true arithmetic the model must not quote unqualified."""
+    result = insights.add_shares(
+        FakeEngine(),
+        query_result([{"R": "a", "m": 80.0}, {"R": "b", "m": -20.0}], ["R", "m"]),
+        dimensions=["R"], measures=["Sum([SUM])"],
+    )
+
+    assert result["rows"][0]["share_pct"] == 133.3
+    assert "negative" in result["negative_values_note"]
+
+
 def test_no_share_on_a_measure_that_does_not_add_up():
     result = insights.add_shares(
         FakeEngine(),
@@ -454,3 +529,26 @@ def test_text_in_the_measure_column_stops_the_shares():
 def test_an_empty_result_is_returned_unchanged():
     empty = query_result([], ["R", "m"])
     assert insights.add_shares(FakeEngine(), empty, dimensions=["R"], measures=["Sum([X])"]) is empty
+
+
+class TestDistinctCountsThatDoNotAddUp:
+    """Count(DISTINCT x) counts a client once per region, so the regional
+    counts sum past the true total and every share against that sum is
+    overstated. DISTINCT does not have to come first: set analysis and
+    TOTAL sit in front of it, and those count no straighter."""
+
+    @pytest.mark.parametrize("expression", [
+        "Count(DISTINCT [Client])",
+        "Count({<[Year]={'2026'}>} DISTINCT [Client])",
+        "Count(TOTAL DISTINCT [Client])",
+        "count( distinct [Client] )",
+    ])
+    def test_no_total_is_offered_for_one(self, expression):
+        assert insights._is_additive(expression) is False
+
+    def test_a_field_called_distinct_something_still_counts_rows(self):
+        """DISTINCT is a keyword, not part of a bracketed field name."""
+        assert insights._is_additive("Count([Distinct Clients])") is True
+
+    def test_a_plain_count_still_adds_up(self):
+        assert insights._is_additive("Count([Orders])") is True

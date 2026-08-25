@@ -26,8 +26,10 @@ log = logging.getLogger(__name__)
 
 # Ids are built here and then handed back to us by the browser, so they are
 # validated on the way in as well: anything outside this alphabet could walk
-# out of the history directory when joined to a path.
-ID_PATTERN = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$")
+# out of the history directory when joined to a path. \Z rather than $,
+# because $ also matches just before a trailing newline - an id ending in
+# a newline would have sailed through to the filesystem.
+ID_PATTERN = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{4}\Z")
 
 TITLE_CHARS = 60
 
@@ -82,16 +84,48 @@ def save(chat_id, messages, app_name=None, title=None):
         # chats every time the app is opened or switched.
         return None
 
-    path = _path(chat_id)
+    previous = load(chat_id)
+    if previous is not None and previous.get("messages") == messages:
+        # Leaving a chat writes it again, so a chat that was merely visited
+        # used to be re-dated and jump above chats that had actually been
+        # talked in - the sidebar is ordered by "updated", and it reshuffled
+        # as the user browsed it. "updated" is when the conversation last
+        # changed, not when it was last written.
+        return previous
+
+    named_by_hand = bool((previous or {}).get("renamed"))
+    if title:
+        name = clean_title(title)
+    elif named_by_hand:
+        # A name the person chose outlives the question the chat started
+        # from - otherwise the next answer would rename it back.
+        name = previous.get("title") or title_from(messages)
+    else:
+        name = title_from(messages)
+
     record = {
         "id": chat_id,
-        "title": title or title_from(messages),
+        "title": name,
+        "renamed": named_by_hand,
         "app": app_name,
-        "created": created_at(chat_id) or _now(),
+        "created": (previous or {}).get("created") or created_at(chat_id) or _now(),
         "updated": _now(),
         "messages": messages,
     }
 
+    _write(chat_id, record)
+    prune()
+    return record
+
+
+def _write(chat_id, record):
+    """Put a record on disk without risking the one already there.
+
+    Written to a temporary file and renamed, because the alternative - opening
+    the real file for writing - truncates it first, so a crash mid-write would
+    leave an empty file where the conversation used to be.
+    """
+    path = _path(chat_id)
     handle, temporary = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as out:
@@ -101,7 +135,34 @@ def save(chat_id, messages, app_name=None, title=None):
         Path(temporary).unlink(missing_ok=True)
         raise
 
-    prune()
+
+def clean_title(title):
+    """One line, no runs of whitespace, short enough for the sidebar."""
+    text = " ".join(str(title or "").split())
+    return text[:TITLE_CHARS] + ("…" if len(text) > TITLE_CHARS else "")
+
+
+def rename(chat_id, title):
+    """Give a chat a name of its own, or None if there is no such chat.
+
+    A chat is named after the first thing asked of it, which is rarely what
+    it turned out to be about. A name chosen here sticks: save() stops
+    deriving one once `renamed` is set.
+
+    The name is not a change to the conversation, so "updated" is left
+    alone - renaming a chat should not move it around the sidebar.
+    """
+    name = clean_title(title)
+    if not name:
+        raise ValueError("A chat needs a name.")
+
+    record = load(chat_id)
+    if record is None:
+        return None
+
+    record["title"] = name
+    record["renamed"] = True
+    _write(chat_id, record)
     return record
 
 
@@ -110,6 +171,11 @@ def load(chat_id):
     try:
         with _path(chat_id).open(encoding="utf-8") as handle:
             record = json.load(handle)
+    except FileNotFoundError:
+        # Not an error: save() reads the previous version of a chat that may
+        # never have been written, and the browser can ask for one that has
+        # since been deleted. Only a file we cannot make sense of is news.
+        return None
     except (OSError, ValueError) as e:
         log.warning("Could not read chat %s: %s", chat_id, e)
         return None
@@ -117,7 +183,32 @@ def load(chat_id):
     if not isinstance(record, dict) or not isinstance(record.get("messages"), list):
         log.warning("Chat %s is not in the expected shape", chat_id)
         return None
+    record["messages"] = _sane_messages(record["messages"])
     return record
+
+
+def _sane_messages(messages):
+    """Strip artifacts older saves left in a conversation.
+
+    Chats saved before tool calls were normalised to plain dicts hold them
+    as repr STRINGS (json.dump's default=str flattened the client's typed
+    objects). Sent back to the model they fail its message validation, so
+    reopening such a chat crashed on the next question. The calls themselves
+    are unrecoverable, but the tool RESULTS that follow still say what
+    happened - dropping the broken entries keeps the conversation usable.
+    """
+    sane = []
+    for message in messages:
+        if isinstance(message, dict) and message.get("tool_calls"):
+            calls = [
+                c for c in message["tool_calls"]
+                if isinstance(c, dict) and isinstance(c.get("function"), dict)
+            ]
+            message = {k: v for k, v in message.items() if k != "tool_calls"}
+            if calls:
+                message["tool_calls"] = calls
+        sane.append(message)
+    return sane
 
 
 def listing():

@@ -84,6 +84,43 @@ class TestColourIsApplied:
         assert properties(colour="banana")["color"]["auto"] is True
 
 
+class TestNestedColourPaths:
+    """Histogram, waterfall and boxplot read their colour from nested paths,
+    not the flat `color` block - so an explicit colour merged flat left the
+    stock colours in place and "make the histogram red" changed nothing."""
+
+    def test_histogram_bars_take_the_colour(self):
+        colour = properties("histogram", colour="red")["color"]
+        assert colour["bar"]["paletteColor"] == {"index": -1, "color": COLOURS["red"]}
+
+    def test_histogram_defaults_survive_without_a_colour(self):
+        colour = properties("histogram")["color"]
+        assert colour["bar"]["paletteColor"]["color"] == "#4477aa"
+
+    def test_waterfall_rises_take_the_colour(self):
+        colour = properties("waterfallchart", colour="green")["color"]
+        assert colour["auto"] is False
+        assert colour["positiveValue"]["paletteColor"] == {
+            "index": -1, "color": COLOURS["green"],
+        }
+
+    def test_waterfall_falls_keep_their_red(self):
+        """Painting falls the same colour as rises hides which is which."""
+        colour = properties("waterfallchart", colour="green")["color"]
+        assert colour["negativeValue"]["paletteColor"]["color"] == "#cc6677"
+
+    def test_boxplot_boxes_take_the_colour(self):
+        colour = properties("boxplot", colour="blue")["boxplotDef"]["color"]
+        assert colour["auto"] is False
+        assert colour["box"]["paletteColor"] == {"index": -1, "color": COLOURS["blue"]}
+
+    def test_multi_keeps_the_default_on_a_single_series(self):
+        """A histogram has no dimension to colour by, so "multi" cannot be
+        expressed - the default is kept rather than a broken block written."""
+        colour = properties("histogram", colour="multi")["color"]
+        assert colour["bar"]["paletteColor"]["color"] == "#4477aa"
+
+
 class TestSpecNormalisation:
 
     def base(self, **extra):

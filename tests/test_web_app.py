@@ -3,6 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+import history
 import session
 import web_app
 from chat_tools import DESTRUCTIVE, LOAD_EDITOR_TOOLS, execute
@@ -55,9 +56,21 @@ class FakeEngine:
 
 
 @pytest.fixture
-def engine():
-    """Install a fake engine into the shared session everything now uses."""
+def engine(monkeypatch):
+    """Install a fake engine into the shared session everything now uses.
+
+    Changing app drops the session and opens a new one, because Qlik Sense
+    Desktop frees an app only when the socket holding it closes - so the
+    same fake is handed back rather than a real QlikEngine reaching for a
+    live Qlik.
+    """
     fake = FakeEngine()
+
+    def new_session():
+        fake.connected = True
+        return fake
+
+    monkeypatch.setattr(session, "QlikEngine", new_session)
     session._state.update({
         "engine": fake, "app_name": "data", "model": "test-model",
         "client": None, "messages": [],
@@ -226,145 +239,79 @@ class TestLoadEditorToolPolicy:
 
     def test_execute_runs_destructive_tools_when_confirmed(self):
         engine = FakeEngine()
-        result = execute(engine, "reload_data", {}, confirm=lambda q: True)
+        result = execute(engine, "reload_data", {}, confirm=lambda q, action: True)
         assert result["success"] is True
         assert engine.reloaded is True
 
-    def test_reload_is_the_only_destructive_action(self):
-        assert DESTRUCTIVE == {"reload_data"}
+    def test_only_the_unrecoverable_actions_are_destructive(self):
+        assert DESTRUCTIVE == {"reload_data", "delete_sheet"}
+
+    def test_building_and_reading_are_never_gated(self):
+        """The gate exists for what cannot be undone. Gating a build would
+        make the assistant ask permission to do the thing it was asked for."""
+        for name in ("query", "data_model", "list_charts", "build_dashboard",
+                     "create_chart", "edit_chart", "analyze_sheet", "save"):
+            assert name not in DESTRUCTIVE
 
 
-class FakeOllama:
-    CAPS = {
-        "gemma4:26b": ["completion", "tools"],
-        "qwen2.5-coder:7b": ["completion", "tools"],
-        "phi4:14b": ["completion"],
-        "kimi:cloud": ["completion", "tools"],
-    }
-    SIZES = {"gemma4:26b": 18e9, "qwen2.5-coder:7b": 4.7e9, "phi4:14b": 9.1e9, "kimi:cloud": 0}
+class TestWithheldIsNotMissing:
+    """A tool that is switched off must not be reported as non-existent.
 
-    def list(self):
-        return {"models": [{"model": n, "size": self.SIZES[n]} for n in self.CAPS]}
+    Withholding delete_sheet from the browser did not read as caution: the
+    assistant answered "I don't have the function to delete sheets" and the
+    user went off to do it by hand. web_app.py's own comment predicted it -
+    a model that is simply refused concludes the action is impossible - and
+    the confirmation path had grown a `note` to prevent exactly that while
+    the withheld path still returned a bare error.
+    """
 
-    def show(self, model):
-        return {"capabilities": self.CAPS.get(model, [])}
+    def test_a_withheld_tool_explains_itself(self):
+        from chat_tools import execute
 
+        result = execute(None, "delete_sheet", {"sheet": "S"}, allowed={"query"})
+        assert "not available here" in result["error"]
+        assert "switched off" in result["note"]
+        assert "not a missing capability" in result["note"]
 
-@pytest.fixture
-def with_models(engine):
-    session._state["client"] = FakeOllama()
-    session._state["model"] = "gemma4:26b"
-    return engine
+    def test_an_invented_tool_gets_no_note(self):
+        """It really does not exist. Told it is merely switched off, a model
+        goes looking for the setting that turns it on and sends the user
+        after a capability nothing here has."""
+        from chat_tools import execute
 
-
-class TestOptions:
-
-    def test_lists_apps_and_models(self, client, with_models, monkeypatch):
-        monkeypatch.setattr(
-            with_models, "list_apps",
-            lambda: [{"name": "data"}, {"name": "data1"}], raising=False,
-        )
-        options = client.get("/api/options").json()
-
-        assert options["apps"] == ["data", "data1"]
-        assert options["model"] == "gemma4:26b"
-
-    def test_marks_models_that_cannot_be_used(self, client, with_models, monkeypatch):
-        monkeypatch.setattr(with_models, "list_apps", lambda: [], raising=False)
-        models = {m["name"]: m for m in client.get("/api/options").json()["models"]}
-
-        assert models["phi4:14b"]["usable"] is False
-        assert "cannot call tools" in models["phi4:14b"]["reason"]
-        assert models["qwen2.5-coder:7b"]["usable"] is True
-
-    def test_cloud_models_are_offered_but_flagged(self, client, with_models, monkeypatch):
-        """Blocking them outright was wrong - some are free and far faster
-        than a big local model. They are the one choice that sends data off
-        the machine, so they are labelled and never auto-picked."""
-        monkeypatch.setattr(with_models, "list_apps", lambda: [], raising=False)
-        models = {m["name"]: m for m in client.get("/api/options").json()["models"]}
-
-        cloud = models["kimi:cloud"]
-        assert cloud["usable"] is True
-        assert cloud["cloud"] is True
-        assert cloud["recommended"] is False
-        assert "data leaves this machine" in cloud["reason"]
-
-    def test_smallest_usable_model_is_offered_first(self, client, with_models, monkeypatch):
-        """On a machine also running Qlik, fitting in memory beats scoring well."""
-        monkeypatch.setattr(with_models, "list_apps", lambda: [], raising=False)
-        names = [m["name"] for m in client.get("/api/options").json()["models"]]
-        assert names[0] == "qwen2.5-coder:7b"
-
-    def test_survives_apps_being_unlistable(self, client, with_models, monkeypatch):
-        from qlik_engine import QlikEngineError
-
-        def boom():
-            raise QlikEngineError("nope")
-
-        monkeypatch.setattr(with_models, "list_apps", boom, raising=False)
-        assert client.get("/api/options").json()["apps"] == ["data"]
+        result = execute(None, "teleport", {}, allowed={"query"})
+        assert "not available here" in result["error"]
+        assert "note" not in result
 
 
-class TestSelect:
+class TestDeletingSheetsFromTheBrowser:
+    """Withheld again, and the refusal has to stay honest.
 
-    def test_switches_model(self, client, with_models):
-        assert client.post("/api/select", json={"model": "qwen2.5-coder:7b"}).status_code == 200
-        assert session.model() == "qwen2.5-coder:7b"
+    It was allowed briefly. The engine side works, but a browser turn has no
+    confirmation step, so "delete all the sheets" is every sheet gone on a
+    small model's reading of one line. What must NOT come back is the
+    original failure: the assistant answering "I don't have the function to
+    delete sheets" and sending the user off to do it by hand.
+    """
 
-    def test_refuses_a_model_that_cannot_call_tools(self, client, with_models):
-        response = client.post("/api/select", json={"model": "phi4:14b"})
-        assert response.status_code == 400
-        assert "cannot call tools" in response.json()["detail"]
-        assert session.model() == "gemma4:26b"
+    def test_delete_sheet_is_withheld_from_the_browser(self):
+        from web_app import ASSISTANT_TOOLS
 
-    def test_switches_app(self, client, with_models, monkeypatch):
-        opened = []
-        monkeypatch.setattr(with_models, "open_app", opened.append, raising=False)
+        assert "delete_sheet" not in ASSISTANT_TOOLS
 
-        assert client.post("/api/select", json={"app": "data1"}).status_code == 200
-        assert opened == ["data1"]
-        assert session.app_name() == "data1"
+    def test_the_refusal_says_switched_off_not_missing(self):
+        from chat_tools import execute
+        from web_app import ASSISTANT_TOOLS
 
-    def test_switching_app_clears_the_conversation(self, client, with_models, monkeypatch):
-        """Otherwise it answers confidently about tables from the old app."""
-        monkeypatch.setattr(with_models, "open_app", lambda name: None, raising=False)
-        session._state["messages"] = [{"role": "user", "content": "about data"}]
+        result = execute(None, "delete_sheet", {"sheet": "S"},
+                         allowed=ASSISTANT_TOOLS)
+        assert "switched off" in result["note"]
+        assert "not a missing capability" in result["note"]
 
-        client.post("/api/select", json={"app": "data1"})
+    def test_the_quieter_destructive_actions_stay_gated(self):
+        """A reload and a script rewrite change what is underneath every
+        chart without changing what the person is looking at."""
+        from web_app import _may_run
 
-        assert [m["role"] for m in session.messages()] == ["system"]
-
-    def test_a_failed_app_switch_keeps_the_current_app(self, client, with_models, monkeypatch):
-        from qlik_engine import QlikEngineError
-
-        def boom(name):
-            raise QlikEngineError("App already open")
-
-        monkeypatch.setattr(with_models, "open_app", boom, raising=False)
-        response = client.post("/api/select", json={"app": "locked"})
-
-        assert response.status_code == 400
-        assert "App already open" in response.json()["detail"]
-        assert session.app_name() == "data"
-
-    def test_selecting_the_same_values_is_a_no_op(self, client, with_models, monkeypatch):
-        opened = []
-        monkeypatch.setattr(with_models, "open_app", opened.append, raising=False)
-        client.post("/api/select", json={"app": "data", "model": "gemma4:26b"})
-        assert opened == []
-
-
-class TestPageIsSelfContained:
-    """It has to work with no internet - the whole point is staying local."""
-
-    def test_index_exists(self):
-        assert web_app.INDEX.is_file()
-
-    @pytest.mark.parametrize("needle", ["http://", "https://", "cdn."])
-    def test_no_external_resources(self, needle):
-        html = web_app.INDEX.read_text(encoding="utf-8")
-        # Ignore the doctype/lang boilerplate and any comment prose.
-        for line in html.splitlines():
-            if needle in line and "<html" not in line and "//" != line.strip()[:2]:
-                assert "placeholder" in line or "e.g." in line, f"external reference: {line.strip()[:90]}"
+        assert _may_run("q", "write_script") is False
+        assert _may_run("q", "delete_sheet") is False

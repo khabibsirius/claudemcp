@@ -58,7 +58,7 @@ def describe(name, arguments):
     return f"{name}({rendered})"
 
 
-def confirm(question):
+def confirm(question, action=None):
     try:
         return input(f"  {question} [y/N] ").strip().lower().startswith("y")
     except EOFError:
@@ -69,7 +69,7 @@ def run_tool(engine, name, arguments, assume_yes=False):
     """Execute one tool call, asking first if it would destroy data."""
     return execute(
         engine, name, arguments,
-        confirm=(lambda question: True) if assume_yes else confirm,
+        confirm=(lambda question, action: True) if assume_yes else confirm,
     )
 
 
@@ -80,7 +80,7 @@ def answer(client, model, engine, messages, assume_yes=False):
         # ASCII only: the Windows console's default code page mangles
         # anything else into replacement characters.
         on_call=lambda name, args: print(f"  -> {describe(name, args)}"),
-        confirm=(lambda question: True) if assume_yes else confirm,
+        confirm=(lambda question, action: True) if assume_yes else confirm,
         max_steps=MAX_STEPS,
     )
 

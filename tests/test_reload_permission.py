@@ -56,11 +56,11 @@ class TestRefusalIsHonest:
     reloading could not be done at all, instead of that it needed a click."""
 
     def refuse(self):
-        return execute(FakeEngine(), "reload_data", {}, confirm=lambda q: False)
+        return execute(FakeEngine(), "reload_data", {}, confirm=lambda q, action: False)
 
     def test_it_is_not_run(self):
         engine = FakeEngine()
-        execute(engine, "reload_data", {}, confirm=lambda q: False)
+        execute(engine, "reload_data", {}, confirm=lambda q, action: False)
         assert engine.reloaded is False
 
     def test_the_note_says_it_is_a_setting(self):
@@ -76,12 +76,15 @@ class TestRefusalIsHonest:
 
     def test_it_runs_when_permitted(self):
         engine = FakeEngine()
-        result = execute(engine, "reload_data", {}, confirm=lambda q: True)
+        result = execute(engine, "reload_data", {}, confirm=lambda q, action: True)
         assert result["success"] is True
         assert engine.reloaded is True
 
-    def test_reload_is_still_the_only_gated_action(self):
-        assert DESTRUCTIVE == {"reload_data"}
+    def test_only_the_two_unrecoverable_actions_are_gated(self):
+        """Both throw away something that cannot be got back: a reload
+        replaces every row, and deleting a sheet takes its charts with it.
+        Everything else is either read-only or scoped to its own tab."""
+        assert DESTRUCTIVE == {"reload_data", "delete_sheet"}
 
 
 class TestChatHonoursTheSetting:
@@ -114,3 +117,37 @@ class TestSystemPromptGuardsTheLoadScript:
     def test_prompt_scopes_script_edits_to_data_requests(self):
         from chat_tools import SYSTEM_PROMPT
         assert "Only touch the load script when the user asks to load" in SYSTEM_PROMPT
+
+
+class TestTheSwitchOnlyCoversLoading:
+    """"Assistant may load data" is one permission, and the browser has no
+    way to ask a second question mid-answer - so it was answering EVERY
+    destructive confirmation, and a whole-script overwrite went through on
+    the strength of a switch about loading data."""
+
+    def test_the_switch_permits_a_reload(self, clean):
+        session.set_allow_reload(True)
+        assert web_app._may_run("reload_data replaces the data. Run it?",
+                                "reload_data") is True
+
+    def test_the_switch_does_not_permit_a_script_overwrite(self, clean):
+        session.set_allow_reload(True)
+        assert web_app._may_run("write_script overwrites the whole script. Run it?",
+                                "write_script") is False
+
+    def test_switching_it_off_still_stops_a_reload(self, clean):
+        session.set_allow_reload(False)
+        assert web_app._may_run("anything", "reload_data") is False
+
+    def test_a_refused_overwrite_leaves_the_script_alone(self, clean):
+        """Refused, not silently applied: the note steers the model to its
+        own tab rather than telling the user it cannot write scripts."""
+        engine = FakeEngine()
+        engine.set_script = lambda *a, **k: pytest.fail("the script was overwritten")
+
+        result = execute(engine, "write_script",
+                         {"content": "LOAD 1;", "mode": "replace_all"},
+                         confirm=web_app._may_run)
+
+        assert result["cancelled"] is True
+        assert "replace_tab" in result["note"]

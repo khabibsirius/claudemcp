@@ -70,15 +70,17 @@ Rules:
 - Beyond the basics you may also use: "combochart" (bars plus a line, for
   two measures on different scales), "treemap" (part-to-whole with many
   categories), "gauge" (one number against a range), "waterfallchart"
-  (contributions adding to a total), "boxplot" and "distributionplot"
-  (spread of a numeric field), "histogram" (distribution of one field, no
-  measure), "sn-pivot-table" (cross-tab of two dimensions), "filterpane"
-  (lets the reader filter the sheet), "qlik-word-cloud", "mekkochart",
-  "qlik-sankey-chart-ext" and "qlik-funnel-chart-ext" (stages of a process).
-  Pick the plain types unless one of these genuinely says more.
-- Do NOT use "scatterplot", "sn-grid-chart", "mekkochart" or
-  "qlik-sankey-chart-ext" here: they need two measures or two dimensions,
-  and this schema carries one of each.
+  (contributions adding to a total), "boxplot" (spread of a numeric field),
+  "histogram" (distribution of one field, no measure), "filterpane" (lets
+  the reader filter the sheet), "qlik-word-cloud" and
+  "qlik-funnel-chart-ext" (stages of a process). Pick the plain types unless
+  one of these genuinely says more.
+- Do NOT use "scatterplot", "sn-grid-chart", "mekkochart",
+  "sn-pivot-table" or "qlik-sankey-chart-ext" here: they need two measures
+  or two dimensions, and this schema carries one of each. A pivot table
+  especially: it is a cross-tab, so with the single dimension this schema
+  can express it has nothing to put across the top and draws an empty
+  grid. Use "table" when one dimension is all the data needs.
 - The chart TITLES are read by a business person, not an analyst. Title a
   chart "Deposits by branch", never "Sum(SUM) by BRANCH" and never the raw
   field name. If a field is cryptic, use the "samples" values to work out

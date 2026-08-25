@@ -104,6 +104,22 @@ class TestDuplicateRejection:
         ])
         assert len(built) == 2
 
+    def test_the_same_chart_with_a_different_limit_is_kept(self):
+        """The regression: "Top 5 markets" was skipped as a duplicate of
+        the all-markets chart because the signature ignored the limit."""
+        _, (built, _) = self.build([
+            viz("barchart", "Sales by market", "Market"),
+            dict(viz("barchart", "Top 5 markets", "Market"), limit=5),
+        ])
+        assert len(built) == 2
+
+    def test_the_same_chart_in_a_different_colour_is_kept(self):
+        _, (built, _) = self.build([
+            dict(viz("barchart", "Sales by market", "Market"), color="red"),
+            dict(viz("barchart", "Sales by market, in blue", "Market"), color="blue"),
+        ])
+        assert len(built) == 2
+
 
 class TestUselessDimensions:
 

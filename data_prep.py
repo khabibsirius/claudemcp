@@ -11,6 +11,7 @@ lives here so it is in one place and testable without a live Qlik.
 """
 
 import logging
+import math
 import re
 
 log = logging.getLogger(__name__)
@@ -62,7 +63,7 @@ def _field_findings(table_name, rows, field):
     name = field.get("name", "")
     density = field.get("density")
     distinct = field.get("distinct")
-    null_count = field.get("null_count", 0) or 0
+    null_count = field.get("null_count")
 
     findings = []
 
@@ -80,9 +81,17 @@ def _field_findings(table_name, rows, field):
                 "Drop the field, or fix the source - it cannot support a chart.",
             )
         elif density < SPARSE_DENSITY:
+            # The engine sometimes supplies density without a null count.
+            # Defaulting the count to 0 next to a density-derived percentage
+            # produced "null in 0 of 1,000 rows (60.0%)", which contradicts
+            # itself - so the count is only quoted when it was reported.
+            if null_count is None:
+                detail = f"{name} is null in {1 - density:.1%} of {rows:,} rows"
+            else:
+                detail = f"{name} is null in {null_count:,} of {rows:,} rows ({1 - density:.1%})"
             add(
                 "medium", "sparse",
-                f"{name} is null in {null_count:,} of {rows:,} rows ({1 - density:.1%})",
+                detail,
                 "Filter the nulls, or default them in the load script "
                 f"(e.g. If(Len(Trim([{name}]))=0, 'Unknown', [{name}]) as [{name}]).",
             )
@@ -137,9 +146,12 @@ def split_tabs(script):
     tabs = []
     parts = re.split(rf"^{re.escape(TAB_MARKER)}(.*)$", script, flags=re.MULTILINE)
 
-    # re.split leaves any text before the first marker in parts[0].
+    # re.split leaves any text before the first marker in parts[0]. It is
+    # kept under an empty name rather than relabelled "Main": naming it
+    # would make join_tabs insert a marker the user never wrote, and would
+    # collide with a real tab called Main further down the script.
     if parts[0].strip():
-        tabs.append(("Main", parts[0]))
+        tabs.append(("", parts[0]))
 
     for index in range(1, len(parts) - 1, 2):
         tabs.append((parts[index].strip(), parts[index + 1]))
@@ -148,8 +160,27 @@ def split_tabs(script):
 
 
 def join_tabs(tabs):
-    """Rebuild a script from (tab_name, body) pairs."""
-    return "".join(f"{TAB_MARKER}{name}\r\n{body.lstrip()}" for name, body in tabs)
+    """Rebuild a script from (tab_name, body) pairs.
+
+    Written in the script's own style rather than a fixed one. The engine
+    hands scripts back with CRLF and generate_load_script builds LF, so a
+    marker - or a freshly written tab - in the other style left the file
+    carrying both, and the next diff of it showed lines nobody had edited.
+    Matching what is already there rewrites nothing that was not touched.
+    An empty name is the unnamed chunk split_tabs found before the first
+    marker; it goes back with no marker invented for it.
+    """
+    newline = "\r\n" if any("\r\n" in body for _, body in tabs) else "\n"
+
+    def styled(text):
+        plain = text.replace("\r\n", "\n").replace("\r", "\n")
+        return plain.replace("\n", newline)
+
+    return "".join(
+        styled(body) if not name
+        else f"{TAB_MARKER}{name}{newline}{styled(body.lstrip())}"
+        for name, body in tabs
+    )
 
 
 def tab_names(script):
@@ -177,7 +208,7 @@ def set_tab(script, body, tab_name=GENERATED_TAB):
     ever touching what someone wrote by hand in another tab.
     """
     tabs = split_tabs(script)
-    body = body.rstrip() + "\r\n\r\n"
+    body = body.rstrip() + "\n\n"
 
     for index, (name, _) in enumerate(tabs):
         if _same_tab(name, tab_name):
@@ -192,7 +223,7 @@ def set_tab(script, body, tab_name=GENERATED_TAB):
 def append_to_tab(script, body, tab_name=GENERATED_TAB):
     """Add to the end of a tab, creating it if needed."""
     existing = get_tab(script, tab_name) or ""
-    combined = f"{existing.rstrip()}\r\n\r\n{body.strip()}" if existing.strip() else body
+    combined = f"{existing.rstrip()}\n\n{body.strip()}" if existing.strip() else body
     return set_tab(script, combined, tab_name=tab_name)
 
 
@@ -256,9 +287,16 @@ def looks_numeric(values):
         text = str(value).strip()
         if text == "":
             continue
+        # float() is more permissive than Qlik: it accepts "nan", "inf" and
+        # underscore separators like "1_000", all of which Qlik reads as
+        # text. Calling such a column numeric skips the Trim() it needs.
+        if "_" in text:
+            return False
         try:
-            float(text)
+            number = float(text)
         except (TypeError, ValueError):
+            return False
+        if math.isnan(number) or math.isinf(number):
             return False
         seen = True
     return seen
@@ -292,8 +330,10 @@ def _load_field_expression(column, trim_text=True, null_tokens=(), is_numeric=Fa
         # Turn placeholder strings into real nulls so Qlik counts them as
         # missing instead of charting "N/A" as a category. Both branches
         # return the original value or null, so a numeric column stays
-        # numeric.
-        expression = f"If({expression} = '{token}', Null(), {expression})"
+        # numeric. Apostrophes are doubled the Qlik way - a raw "n'a" would
+        # end the literal early and break the whole script.
+        literal = str(token).replace("'", "''")
+        expression = f"If({expression} = '{literal}', Null(), {expression})"
 
     return quoted if expression == quoted else f"{expression} as {quoted}"
 
@@ -317,8 +357,18 @@ def normalise_derived(derived):
         if not name or not expression:
             continue
 
-        # The model sometimes includes the "as X" part; the generator adds it.
-        expression = re.sub(r"\s+as\s+\[?[^\[\]]+\]?\s*$", "", expression, flags=re.I)
+        # The model sometimes includes the "as X" part; the generator adds
+        # it. Only a plain identifier or [bracketed] tail counts, and only
+        # outside string literals - a looser match once ate the end of
+        # If(a, 'x as y'), leaving If(a, 'x and a broken script.
+        # \w rather than an A-Z range: the alias is as often Год as Year,
+        # and an unstripped one became "... as Год as [Год]", which the
+        # syntax check rejects and the whole script with it.
+        match = re.search(
+            r"\s+as\s+(\[[^\[\]]+\]|[^\W\d]\w*(?:\.\w+)*)\s*$", expression, flags=re.I
+        )
+        if match and expression.count("'", 0, match.start()) % 2 == 0:
+            expression = expression[:match.start()]
         cleaned.append((name, expression.rstrip(",")))
 
     return cleaned
@@ -361,7 +411,14 @@ def generate_load_script(
     if mode not in ("separate", "concatenate"):
         raise ValueError(f"mode must be 'separate' or 'concatenate', got {mode!r}")
 
-    combined_name = table_name or (sources[0].get("table") if sources else "Data")
+    # An empty script written into a tab looks like success while loading
+    # nothing, so no sources is an error rather than a silent no-op.
+    if not sources:
+        raise ValueError("sources is empty - there is nothing to load")
+
+    # A first source with no table name used to leave the concatenate target
+    # literally called None.
+    combined_name = table_name or sources[0].get("table") or "Data"
 
     for index, source in enumerate(sources):
         columns = [c for c in source.get("columns", []) if c]
@@ -408,7 +465,9 @@ def generate_load_script(
             field_lines.append(f"    {expression} as {qlik_quote(name)}")
 
         lines.append(",\n".join(field_lines))
-        lines.append(f"FROM [{lib_path(source['connection'], source['path'])}]")
+        # qlik_quote, not bare brackets: a ] in the connection or path would
+        # otherwise close the FROM clause mid-path.
+        lines.append(f"FROM {qlik_quote(lib_path(source['connection'], source['path']))}")
         lines.append(
             from_format_spec(source.get("path"), source.get("file_table")) + ";"
         )

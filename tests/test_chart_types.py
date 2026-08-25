@@ -13,6 +13,7 @@ from chart_specs import (
     CHART_TYPES,
     VERIFIED_TYPES,
     build_properties,
+    hypercube_owner,
     chart_requirements,
     default_size,
     resolve_chart_type,
@@ -72,6 +73,15 @@ class TestNameResolution:
     def test_an_engine_name_passes_straight_through(self):
         assert resolve_chart_type("qlik-funnel-chart-ext") == "qlik-funnel-chart-ext"
 
+    def test_every_alias_lands_on_a_type_that_exists(self):
+        """The regression: "distribution" pointed at "distributionplot",
+        which has no defaults bundle - so the alias resolved to a type that
+        validation then rejected as unknown."""
+        from chart_specs import CHART_ALIASES
+
+        for alias, target in CHART_ALIASES.items():
+            assert target in CHART_TYPES, f"{alias!r} -> {target!r}"
+
 
 class TestRequirements:
     """Read from each bundle's own targets. No amount of documentation
@@ -115,7 +125,11 @@ class TestGeneratedProperties:
 
     @pytest.mark.parametrize("chart_type", NEW_TYPES)
     def test_carries_the_hypercube(self, chart_type):
-        assert "qHyperCubeDef" in build_properties(chart_type, "O", "t", hypercube())
+        """In whichever branch of the tree this bundle reads it from."""
+        owner, _path = hypercube_owner(
+            build_properties(chart_type, "O", "t", hypercube())
+        )
+        assert "qHyperCubeDef" in owner
 
     @pytest.mark.parametrize("chart_type", NEW_TYPES)
     def test_has_a_usable_grid_size(self, chart_type):
@@ -131,6 +145,15 @@ class TestGeneratedProperties:
             if key in ("qHyperCubeDef", "qInfo", "title", "visualization"):
                 continue
             assert key in generated, f"{chart_type} lost {key}"
+
+    def test_versions_are_plain_strings(self):
+        """The generator wrote gauge's and sn-table's properties.version as
+        the doubly-quoted string '"0.8.13"' - a version carrying its own
+        quotes, unlike every sibling and any hand-built object we dumped."""
+        for chart_type, spec in CHART_DEFAULTS.items():
+            version = spec["properties"].get("version")
+            if version is not None:
+                assert '"' not in version, f"{chart_type}: {version!r}"
 
     def test_our_dimensions_reach_the_chart(self):
         cube = {"qDimensions": [{"qDef": {"qFieldDefs": ["Region"]}}], "qMeasures": []}
@@ -176,5 +199,11 @@ class TestVerifiedTypesUnchanged:
         assert properties["measureAxis"]["show"] == "all"
 
     def test_table_still_declares_column_order(self):
-        properties = build_properties("table", "O", "t", hypercube())
-        assert properties["columnOrder"] == [0, 1]
+        """"table" is an alias onto the bundle's sn-table now: its own
+        hand-written tree went stale and drew an empty pane in a real app.
+        The column order still has to be there, it just comes from the
+        bundle rather than from us."""
+        properties = build_properties(
+            resolve_chart_type("table"), "O", "t", hypercube()
+        )
+        assert properties["qHyperCubeDef"]["qColumnOrder"] == [0, 1]

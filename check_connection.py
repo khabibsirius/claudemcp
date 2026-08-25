@@ -11,6 +11,7 @@ import sys
 
 from config import APP_NAME, OLLAMA_MODEL
 from config import summary as config_summary
+import session
 from ollama_client import OllamaClient, OllamaError
 from qlik_engine import QlikEngine, QlikEngineError
 
@@ -64,6 +65,45 @@ def check_qlik():
         except QlikEngineError as e:
             print(f"{FAIL} Listing sheets\n        {e}")
             return False
+
+    # Outside the `with`, so this socket has let go of the app it opened.
+    # Changing app depends on exactly that, which is why the check comes
+    # after rather than inside.
+    if not check_switching(names):
+        print("        ^ this is what stops the App picker changing app.")
+
+    return True
+
+
+def check_switching(names):
+    """Change app the way the App picker does.
+
+    Qlik Sense Desktop keeps ONE app open per engine and offers no way to
+    close one - the app is freed when the session holding it disconnects, so
+    changing app means a new session. This walks session.open_app, which is
+    the path the web UI and the MCP tools both take, because holding the
+    connection across a switch is what used to make the app unchangeable.
+
+    A failure here with another app named is usually a second client - a
+    running web_app.py, or the Qlik Sense window sitting inside an app.
+    """
+    others = [name for name in names if name != APP_NAME]
+    if not others:
+        print(f"{OK} Only one app on this Qlik - nothing to switch to")
+        return True
+
+    target = others[0]
+    try:
+        session.open_app(APP_NAME)
+        session.open_app(target)
+        print(f"{OK} Changed app from {APP_NAME!r} to {target!r}")
+        session.open_app(APP_NAME)
+        print(f"{OK} Changed back to {APP_NAME!r}")
+    except QlikEngineError as e:
+        print(f"{FAIL} Changing app to {target!r}\n        {e}")
+        return False
+    finally:
+        session.close()
 
     return True
 

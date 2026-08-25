@@ -20,6 +20,11 @@ from chart_specs import (
     resolve_colour,
 )
 from config import APP_NAME, OLLAMA_MODEL
+# A control or a one-field distribution aggregates nothing, so there is no
+# measure to read back and nothing to call empty. Shared with insights rather
+# than restated, so the two cannot drift into disagreeing about which types
+# have a measure at all.
+from insights import NO_MEASURE_TYPES
 from ollama_client import OllamaClient, OllamaError
 from prompts import DASHBOARD_SYSTEM_PROMPT, build_dashboard_prompt
 from qlik_engine import QlikEngine, QlikEngineError, bare_field_name
@@ -114,6 +119,11 @@ def validate_visualization(viz, field_names=None, field_info=None, engine=None):
     checks are skipped - only shape and expression syntax are enforced.
     field_info: optional {name: field dict} carrying cardinality, used to
     reject dimensions that are really identifiers.
+
+    Given an engine, this also writes `viz["preview"]` - what the chart
+    returned when it was queried. The caller needs it to say what a chart
+    contains rather than only what it is called, and caching it on the spec
+    is what stops the second validation pass querying the app again.
     """
 
     viz_type = viz.get("type")
@@ -127,6 +137,15 @@ def validate_visualization(viz, field_names=None, field_info=None, engine=None):
 
     # Each type declares what it can draw, taken from Qlik's own bundle.
     (min_dims, _max_dims), (min_meas, max_meas) = chart_requirements(viz_type)
+
+    if min_dims > 1:
+        # A sankey needs at least two dimensions and this spec carries at
+        # most one, so no choice of field can save it - it would build a
+        # chart that renders blank, exactly like the measure case below.
+        return (
+            f"{viz_type} needs {min_dims} dimensions and a dashboard spec "
+            "provides one - use create_chart for it"
+        )
 
     # Qlik permits a bar chart with no dimension - it draws one bar. Allowed
     # is not the same as useful, so the classic types still require one on
@@ -177,6 +196,18 @@ def validate_visualization(viz, field_names=None, field_info=None, engine=None):
                 "unknown field(s): " + ", ".join(check["bad_fields"])
             )
             return f"measure_expression {expression!r} was rejected by Qlik: {detail}"
+
+        # Valid is not the same as non-empty, so the last question asked is
+        # the one the reader will ask: does anything actually appear in it.
+        preview, problem = probe_visualization(engine, viz)
+        if problem:
+            return problem
+        if preview:
+            # Carried on the spec so whoever builds it can say what it holds.
+            # normalize_visualization copies the dict, so this survives the
+            # second pass build_dashboard makes over the same spec, and the
+            # chart is not queried twice.
+            viz["preview"] = preview
         return None
 
     # No engine to ask (unit tests, offline checks): fall back to the
@@ -194,22 +225,183 @@ def validate_visualization(viz, field_names=None, field_info=None, engine=None):
     return None
 
 
+# How many rows the probe reads. It only needs to know whether anything came
+# back and what the largest row is - not the distribution, which analyze_sheet
+# reads properly afterwards.
+PROBE_ROWS = 3
+
+
+def probe_shape(viz):
+    """The dimensions and measures the chart will actually be built from.
+
+    A dashboard spec carries one of each; create_chart carries lists, which
+    is the whole reason it exists. Both have to be probed as they will be
+    BUILT - a scatter plot is one dimension and two measures, and querying
+    only the first measure tests a chart that is not the one being created.
+    """
+    dimensions = viz.get("dimensions")
+    if dimensions is None:
+        dimension = viz.get("dimension")
+        dimensions = [dimension] if dimension else []
+
+    expressions = viz.get("measure_expressions")
+    if expressions is None:
+        expression = effective_expression(viz)
+        expressions = [expression] if expression else []
+
+    return (
+        [d for d in dimensions if d and str(d).strip()],
+        [e for e in expressions if e and str(e).strip()],
+    )
+
+
+def probe_visualization(engine, viz):
+    """Run the chart's own query before it is built. (preview, problem).
+
+    Everything above this checks that a chart is well-FORMED: the field
+    exists, the expression parses, the dimension is a category and not an id.
+    None of it checks that the chart will SHOW anything, and the two come
+    apart constantly. Sum([Branch Name]) is a valid aggregation over a real
+    field and totals zero. A set analysis can select down to no rows. A
+    dimension can be real and hold nothing but nulls against this measure.
+    Qlik builds all three without complaint and renders an empty box.
+
+    That empty box is the worst result available here - worse than a refusal,
+    because the person is told the chart was built and finds out weeks later
+    that it never showed anything. So the numbers are read from the live app
+    first, and a chart that comes back with nothing in it is refused with the
+    reason, exactly as a hallucinated field name is.
+
+    Every dimension and every measure goes into the probe, because the cube
+    the chart runs is the only cube worth testing. Probing the first of each
+    passes a scatter plot whose second measure returns nothing - which draws
+    axes and no points, the exact silent blank this exists to prevent.
+
+    The rows that do come back are handed on as `preview`, which is what
+    finally lets the caller say what a chart contains instead of only what it
+    is called.
+    """
+
+    if engine is None or viz.get("type") in NO_MEASURE_TYPES:
+        return None, None
+
+    # design_full_dashboard validates a spec, then build_dashboard validates
+    # the survivors again. A probe is a real query against the app, so the
+    # second pass reuses the first one's answer rather than paying for it.
+    if viz.get("preview"):
+        return viz["preview"], None
+
+    dimensions, expressions = probe_shape(viz)
+    if not expressions:
+        return None, None
+
+    try:
+        result = engine.query(
+            dimensions=dimensions, measures=expressions, limit=PROBE_ROWS
+        )
+    except Exception as e:
+        # A probe that cannot run is not evidence the chart is empty, and a
+        # chart is not worth refusing because the lookup failed - the same
+        # best-effort rule the field and expression checks follow.
+        log.debug("Could not probe %r: %s", viz.get("title"), e)
+        return None, None
+
+    columns = result.get("columns") or []
+    rows = result.get("rows") or []
+    if not columns or not rows:
+        return None, (
+            "it returns no rows from this app's data, so it would render "
+            "blank - the fields and the expressions are valid but nothing "
+            "comes back when they are combined"
+        )
+
+    # Every measure has to draw. A scatter plot with no Y value is an empty
+    # chart even when X is perfect, so each column is checked rather than
+    # just the one the preview happens to quote.
+    dimension = dimensions[0] if dimensions else None
+    values_by_measure = []
+    for offset, expression in enumerate(expressions):
+        index = len(dimensions) + offset
+        if index >= len(columns):
+            break
+        column = columns[index]
+        values = [
+            v for v in (row.get(column) for row in rows)
+            if isinstance(v, (int, float)) and not isinstance(v, bool)
+        ]
+        if not values:
+            return None, (
+                f"the measure {expression!r} returns no numeric value over "
+                f"{'this dimension' if dimension else 'this data'} - it is "
+                "probably aggregating a text field, which draws an empty chart"
+            )
+        values_by_measure.append(values)
+
+    if not values_by_measure:
+        return None, (
+            "no measure column came back, so there would be nothing to plot"
+        )
+
+    # The first measure is the one a chart is read by, so it is the one the
+    # preview quotes.
+    values = values_by_measure[0]
+    expression = expressions[0]
+
+    preview = {"rows_returned": len(rows), "measure": expression}
+    if len(expressions) > 1:
+        preview["measures"] = expressions
+    total_rows = result.get("total_rows")
+    if isinstance(total_rows, int):
+        preview["categories"] = total_rows
+
+    if dimension:
+        label = rows[0].get(columns[0])
+        preview["largest"] = {"label": label, "value": _round_preview(values[0])}
+    else:
+        preview["value"] = _round_preview(values[0])
+
+    # Zero is not proof of a broken chart - a genuinely empty period totals
+    # zero - but it is what a wrong measure looks like, so the caller is told
+    # rather than left to present "0" as a finding.
+    if not any(values):
+        preview["warning"] = (
+            "every value read back is zero - check this is really the measure "
+            "the user wanted, and say so when reporting it"
+        )
+
+    return preview, None
+
+
+def _round_preview(value):
+    """Trim a float for transport; the caller formats it for the reader."""
+    return round(value, 1) if abs(value) >= 100 else round(value, 4)
+
+
 # Charts are placed in the order they are built, so the order decides the
 # layout. KPIs are small and belong across the top; a table is full width and
 # belongs at the bottom. Left in model order you get a headline number
 # stranded between two bar charts.
-_LAYOUT_ORDER = {"kpi": 0, "barchart": 1, "linechart": 1, "piechart": 2, "table": 3}
+_LAYOUT_ORDER = {
+    "kpi": 0, "barchart": 1, "linechart": 1, "piechart": 2, "sn-table": 3,
+}
 
 
 def arrange(visualizations):
     """Order visualizations so the sheet reads top-down: KPIs, charts, table.
 
     Stable, so the model's own ordering still decides ties.
+
+    The type is resolved first because this runs on the model's raw spec,
+    before normalize_visualization has canonicalised anything. A model that
+    writes "table" or "pivot table" would otherwise miss its entry here and
+    be laid out as a mid-sheet chart - a full-width table landing in the
+    middle of the sheet, pushing everything after it below the fold.
     """
-    return sorted(
-        visualizations,
-        key=lambda v: _LAYOUT_ORDER.get((v.get("type") or "").strip().lower(), 2),
-    )
+    def rank(viz):
+        raw = (viz.get("type") or "").strip().lower()
+        return _LAYOUT_ORDER.get(resolve_chart_type(raw) or raw, 2)
+
+    return sorted(visualizations, key=rank)
 
 
 def validate_spec(spec):
@@ -277,6 +469,19 @@ def design_dashboard(fields, model=OLLAMA_MODEL, instruction=None, client=None):
     return validate_spec(spec)
 
 
+def _signature(viz):
+    """What makes two visualizations "the same chart".
+
+    Type, grouping and measure - plus limit and colour, because a Top 5
+    view is not a duplicate of the full list, and a red chart is not a
+    duplicate of the blue one someone explicitly asked for alongside it.
+    """
+    return (
+        viz["type"], viz.get("dimension"), effective_expression(viz),
+        viz.get("limit"), viz.get("color"),
+    )
+
+
 def build_dashboard(engine, spec, field_names=None, fields=None, validate_with_engine=True):
     """Create the sheet and charts in Qlik from a dashboard spec.
 
@@ -323,7 +528,7 @@ def build_dashboard(engine, spec, field_names=None, fields=None, validate_with_e
         # Models happily produce "Sales by Region" as both a bar chart and a
         # pie chart, or the same chart twice under different titles. Three
         # views of one number is not a dashboard.
-        signature = (viz["type"], viz.get("dimension"), effective_expression(viz))
+        signature = _signature(viz)
         if signature in seen:
             skipped.append((viz, "duplicate of a chart already on this sheet"))
             log.warning("Skipped %r: duplicate", viz.get("title"))
@@ -365,7 +570,7 @@ def _partition(visualizations, field_names, field_info, seen=None, engine=None):
             bad.append((viz, error))
             continue
 
-        signature = (viz["type"], viz.get("dimension"), effective_expression(viz))
+        signature = _signature(viz)
         if signature in seen:
             bad.append((viz, "duplicate of a chart already on this sheet"))
             continue
@@ -410,10 +615,14 @@ def design_full_dashboard(fields, model=OLLAMA_MODEL, instruction=None, client=N
             f"{instruction or 'Design a dashboard.'}\n\n"
             f"Design exactly {missing} more visualization(s) for this same "
             f"dashboard. These were rejected, so do not repeat them or reuse "
-            f"the fields that caused them: {rejected}. Do not repeat any of "
-            f"these either: "
-            + "; ".join(f"{v['type']} of {v.get('dimension')}" for v in good)
+            f"the fields that caused them: {rejected}."
         )
+        if good:
+            # When nothing was buildable there is nothing to avoid
+            # repeating, and the clause went out ending in a dangling colon.
+            top_up += " Do not repeat any of these either: " + "; ".join(
+                f"{v['type']} of {v.get('dimension')}" for v in good
+            )
 
         try:
             extra = design_dashboard(fields, model=model, instruction=top_up, client=client)
@@ -460,7 +669,17 @@ def build_sheet(engine, title, charts, fields=None, description="Created by AI")
     return {
         "sheet": title,
         "sheet_id": engine.sheet_id,
-        "built": [{"type": v["type"], "title": v["title"]} for v in built],
+        # Type and title alone described a chart the caller had never seen the
+        # inside of, which is how an empty one got reported as a success. The
+        # preview is what each chart actually returned when it was queried.
+        "built": [
+            {
+                "type": v["type"],
+                "title": v["title"],
+                **({"shows": v["preview"]} if v.get("preview") else {}),
+            }
+            for v in built
+        ],
         "skipped": [{"title": v.get("title"), "reason": r} for v, r in skipped],
     }
 

@@ -178,7 +178,7 @@ class TestAgentLoop:
 class TestDestructiveConfirmation:
 
     def test_reload_is_skipped_when_declined(self, monkeypatch):
-        monkeypatch.setattr(chat, "confirm", lambda question: False)
+        monkeypatch.setattr(chat, "confirm", lambda question, action=None: False)
         engine = FakeEngine()
 
         result = chat.run_tool(engine, "reload_data", {})
@@ -187,7 +187,7 @@ class TestDestructiveConfirmation:
         assert engine.calls == [], "reload ran despite being declined"
 
     def test_reload_runs_when_confirmed(self, monkeypatch):
-        monkeypatch.setattr(chat, "confirm", lambda question: True)
+        monkeypatch.setattr(chat, "confirm", lambda question, action=None: True)
         engine = FakeEngine()
 
         assert chat.run_tool(engine, "reload_data", {})["success"] is True
@@ -243,3 +243,225 @@ class TestOutputIsAsciiSafe:
 
     def test_call_lines_are_ascii(self):
         chat.describe("query", {"dimensions": ["Market"]}).encode("ascii")
+
+
+class TestMalformedArguments:
+    """A tool-call arguments string that was not JSON used to become {}, and
+    the tool ran with every default - write_script wrote an empty tab over
+    the script the model had just composed."""
+
+    def test_the_tool_is_refused_not_run_with_defaults(self, monkeypatch):
+        ran = []
+        monkeypatch.setitem(
+            FUNCTIONS, "query", lambda engine, **kw: ran.append(kw) or {"ok": True}
+        )
+
+        client = ScriptedClient([
+            {"content": "", "tool_calls": [tool_call("query", '{"limit": broken')]},
+            {"content": "Let me fix that.", "tool_calls": []},
+        ])
+        messages = []
+        chat.answer(client, "m", FakeEngine(), messages)
+
+        assert ran == [], "the tool ran despite unparseable arguments"
+        assert "not valid JSON" in json.loads(messages[1]["content"])["error"]
+
+
+class TestToolResultMessages:
+    """A result with no tool_name left the model matching results to calls
+    by position, and a bare slice at the size cap cut mid-string, leaving
+    broken JSON with no sign that anything was missing."""
+
+    def turn(self, monkeypatch, result):
+        monkeypatch.setitem(FUNCTIONS, "query", lambda engine, **kw: result)
+        client = ScriptedClient([
+            {"content": "", "tool_calls": [tool_call("query", {})]},
+            {"content": "done", "tool_calls": []},
+        ])
+        messages = []
+        chat.answer(client, "m", FakeEngine(), messages)
+        return messages[1]
+
+    def test_results_carry_the_tool_name(self, monkeypatch):
+        assert self.turn(monkeypatch, {"rows": []})["tool_name"] == "query"
+
+    def test_oversized_results_end_with_a_visible_marker(self, monkeypatch):
+        big = {"rows": "x" * (chat_tools.TOOL_RESULT_CHARS * 2)}
+        content = self.turn(monkeypatch, big)["content"]
+
+        assert content.endswith("...[truncated]")
+        assert len(content) == chat_tools.TOOL_RESULT_CHARS + len("...[truncated]")
+
+    def test_small_results_stay_intact_json(self, monkeypatch):
+        content = self.turn(monkeypatch, {"rows": [1]})["content"]
+        assert json.loads(content) == {"rows": [1]}
+
+
+class TestHistoryBudgetSeesToolCalls:
+    """trim_history counted only content, so an assistant message carrying a
+    whole load script inside tool_calls weighed nothing - the budget
+    undercounted and Ollama's silent front-truncation came back."""
+
+    def test_tool_call_payloads_count_toward_the_budget(self):
+        script_call = {
+            "function": {"name": "write_script", "arguments": {"content": "x" * 50_000}}
+        }
+        messages = [
+            {"role": "user", "content": "load it"},
+            {"role": "assistant", "content": "", "tool_calls": [script_call]},
+            {"role": "tool", "content": "ok"},
+            {"role": "assistant", "content": "done"},
+            {"role": "user", "content": "new question"},
+            {"role": "assistant", "content": "answer"},
+        ]
+        trimmed = chat_tools.trim_history(messages, max_chars=10_000)
+        assert trimmed[0]["content"] == "new question", (
+            "the turn with the oversized tool_calls payload was kept"
+        )
+
+    def test_the_fallback_never_strands_a_tool_result(self):
+        # No user message to cut at, and over budget: the old rest[-2:]
+        # opened on the tool result with no assistant tool_calls before it,
+        # which the model rejects as malformed.
+        messages = [
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"function": {"name": "query", "arguments": {}}}]},
+            {"role": "tool", "content": "x" * 100},
+            {"role": "assistant", "content": "y"},
+        ]
+        trimmed = chat_tools.trim_history(messages, max_chars=10)
+        assert trimmed[0]["role"] != "tool"
+
+
+class TestScriptOverwriteConfirmation:
+    """write_script mode='replace_all' throws away every hand-written tab,
+    but only reload_data was gated - a user who would have declined lost
+    the whole script without ever being asked."""
+
+    def test_replace_all_is_skipped_when_declined(self, monkeypatch):
+        monkeypatch.setattr(chat, "confirm", lambda question, action=None: False)
+        engine = FakeEngine()
+
+        result = chat.run_tool(
+            engine, "write_script", {"content": "x", "mode": "replace_all"}
+        )
+
+        assert result["cancelled"] is True
+        assert engine.calls == [], "the whole script was overwritten anyway"
+
+    def test_replace_all_runs_when_confirmed(self, monkeypatch):
+        monkeypatch.setattr(chat, "confirm", lambda question, action=None: True)
+        engine = FakeEngine()
+
+        result = chat.run_tool(
+            engine, "write_script",
+            {"content": "///$tab Mine\nLOAD 2 AS y AUTOGENERATE 1;", "mode": "replace_all"},
+        )
+
+        assert result["ok"] is True
+        assert engine.calls, "confirmed overwrite did not run"
+
+    def test_the_per_tab_modes_never_prompt(self, monkeypatch):
+        def fail(question):
+            raise AssertionError("should not have prompted")
+
+        monkeypatch.setattr(chat, "confirm", fail)
+        engine = FakeEngine()
+
+        result = chat.run_tool(
+            engine, "write_script",
+            {"content": "LOAD 2 AS y AUTOGENERATE 1;", "tab": "Mine"},
+        )
+        assert result["ok"] is True
+
+
+class TestToolCallsSurviveSaving:
+    """A chat reopened from history crashed on the next question.
+
+    history.save writes messages with json.dump(default=str), which
+    flattens the typed tool-call objects the ollama client returns into
+    their repr strings - and a reopened chat sent those strings back to
+    the model, whose message validation rejects them. The loop stores
+    plain dicts instead, so a conversation survives the round-trip.
+    """
+
+    def test_typed_tool_calls_are_stored_as_plain_dicts(self):
+        from ollama._types import Message
+
+        typed = Message.ToolCall(
+            function=Message.ToolCall.Function(name="query", arguments={"limit": 5})
+        )
+        client = ScriptedClient([
+            {"content": "", "tool_calls": [typed]},
+            {"content": "done", "tool_calls": []},
+        ])
+        messages = [{"role": "user", "content": "top 5?"}]
+        chat_tools.run_agent(client, "m", FakeEngine(), messages)
+
+        recorded = [m for m in messages if m.get("tool_calls")]
+        assert recorded, "the tool-call turn was not recorded"
+        for message in recorded:
+            for call in message["tool_calls"]:
+                assert isinstance(call, dict)
+        # The whole conversation survives the save round-trip unchanged.
+        assert json.loads(json.dumps(messages, default=str)) == messages
+
+
+class TestDeleteSheetNeedsPermission:
+    """It takes the charts with it and cannot be undone, so it is gated the
+    same way a reload is - and the model claimed to have done it long before
+    it could, which is what the tool exists to stop."""
+
+    class Sheets:
+        def __init__(self):
+            self.deleted = []
+
+        def delete_sheet(self, sheet):
+            self.deleted.append(sheet)
+            return {"deleted": "SH_1", "title": sheet, "charts": 3}
+
+    def test_it_is_declined_without_confirmation(self):
+        engine = self.Sheets()
+
+        result = chat_tools.execute(engine, "delete_sheet", {"sheet": "Spare"})
+
+        assert result["cancelled"] is True
+        assert engine.deleted == []
+
+    def test_the_question_names_the_sheet(self):
+        engine = self.Sheets()
+        asked = []
+
+        chat_tools.execute(engine, "delete_sheet", {"sheet": "Spare"},
+                           confirm=lambda q, action: asked.append((q, action)) or False)
+
+        question, action = asked[0]
+        assert "Spare" in question
+        assert action == "delete_sheet"
+
+    def test_it_runs_once_permitted(self):
+        engine = self.Sheets()
+
+        result = chat_tools.execute(engine, "delete_sheet", {"sheet": "Spare"},
+                                    confirm=lambda q, action: True)
+
+        assert engine.deleted == ["Spare"]
+        assert result["charts"] == 3
+
+    def test_the_schema_says_it_cannot_be_undone(self):
+        """A model that thinks this is reversible will use it to tidy up."""
+        described = next(t["function"]["description"] for t in chat_tools.TOOLS
+                         if t["function"]["name"] == "delete_sheet")
+        assert "not undoable" in described
+
+
+class TestBuildDashboardSaysItMakesANewSheet:
+    """Asked for twenty charts on one sheet, the model called this twenty
+    times and made twenty sheets - the description never said each call is
+    its own sheet."""
+
+    def test_the_schema_says_each_call_is_a_new_sheet(self):
+        described = next(t["function"]["description"] for t in chat_tools.TOOLS
+                         if t["function"]["name"] == "build_dashboard")
+        assert "NEW" in described
+        assert "ONE call" in described

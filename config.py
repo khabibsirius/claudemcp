@@ -137,7 +137,21 @@ OLLAMA_NUM_CTX = _int_env("OLLAMA_NUM_CTX", 32768)
 # should be a decision to TRIM the prompt instead: past this point the
 # assistant is spending more context on its instructions than on the
 # user's conversation.
-CHAT_HISTORY_RESERVE = 19_000
+#
+# Fifth raise, 19,000 -> 19,500, and taken as that decision rather than
+# around it. The prompt was trimmed four times first - the inventory
+# briefing, the capability rules and the numbers section were all tightened
+# and the reserve still would not hold what had to go in. What forced it was
+# a real gap rather than more prose: the router had no DELETE intent, so the
+# assistant told a user it could not delete sheets while holding
+# delete_sheet. Denying a capability it has is the same defect as inventing
+# one, and closing it cost more than the trimming had freed.
+#
+# The 500 costs ~1,500 characters of history, about 3.6%. If this needs
+# raising again, the question to ask first is whether OLLAMA_NUM_CTX can go
+# up instead - the prompt is near the point where trimming it further starts
+# removing rules that exist because something went wrong once.
+CHAT_HISTORY_RESERVE = 19_500
 
 CHAT_HISTORY_CHARS = _int_env(
     "CHAT_HISTORY_CHARS", max(24_000, (OLLAMA_NUM_CTX - CHAT_HISTORY_RESERVE) * 3)

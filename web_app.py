@@ -53,6 +53,26 @@ ASSISTANT_TOOLS = LOAD_EDITOR_TOOLS | {
 }
 
 
+def _may_run(question, action):
+    """Answer a destructive action's confirmation on the browser's behalf.
+
+    There is nowhere to ask mid-request - the answer is already streaming -
+    so each action is decided by what the person has already agreed to. The
+    one switch here says the assistant may LOAD DATA, and it is not a
+    licence to throw away the load script or a sheet full of charts as well:
+    those are refused, and the model is told to work in its own tab, or to
+    ask for the deletion in so many words.
+
+    delete_sheet was briefly allowed here and taken out again. The engine
+    side works - a sheet named to delete_sheet is removed, charts and all -
+    but a browser turn has no confirmation step, so "delete all the sheets"
+    is 23 irreversible deletions decided by how a small model read one line
+    of text. The terminal chat asks before each one and keeps it. Anyone
+    re-enabling this should add the prompt, not just the permission.
+    """
+    return action == "reload_data" and session.allow_reload()
+
+
 @contextlib.asynccontextmanager
 async def lifespan(_app):
     # The MCP session manager needs its own lifespan running, or /mcp 500s on
@@ -109,6 +129,10 @@ class Selection(BaseModel):
     language: str | None = None
 
 
+class Rename(BaseModel):
+    title: str
+
+
 @app.get("/")
 def index():
     return FileResponse(INDEX)
@@ -148,10 +172,17 @@ def get_state():
 def get_options():
     """Apps and models the person can switch between."""
     try:
-        apps = [a["name"] for a in engine().list_apps() if a["name"]]
+        apps = session.list_apps()
     except QlikEngineError as e:
         log.debug("Could not list apps: %s", e)
-        apps = [session.app_name()]
+        apps = []
+
+    # The open app belongs in the picker even when the listing failed, or
+    # there is nothing to switch back to - but it is no longer the ONLY
+    # entry, which is what made the app impossible to change.
+    open_now = session.app_name()
+    if open_now and open_now not in apps:
+        apps.insert(0, open_now)
 
     try:
         models = describe_models(session.client())
@@ -266,7 +297,7 @@ def post_chat(body: ChatMessage):
                 allowed=ASSISTANT_TOOLS,
                 on_call=lambda name, args: actions.append(name),
                 # Gated by the setting, not withheld outright.
-                confirm=lambda question: session.allow_reload(),
+                confirm=_may_run,
             )
         except Exception as e:
             log.exception("Chat turn failed")
@@ -274,8 +305,10 @@ def post_chat(body: ChatMessage):
 
         session.persist()
         after = engine_.get_script()
+        # Inside the lock, like the stream path: read after it is released,
+        # another turn's new sheets get counted as this one's.
+        sheets = engine_.list_sheets()
 
-    sheets = engine_.list_sheets()
     return {
         "reply": reply,
         "actions": actions,
@@ -315,14 +348,23 @@ def post_chat_stream(body: ChatMessage):
                 messages = session.messages()
                 messages.append({"role": "user", "content": body.message})
 
-                for event in stream_agent(
-                    session.client(), model, engine_, messages,
-                    allowed=ASSISTANT_TOOLS,
-                    confirm=lambda question: session.allow_reload(),
-                ):
-                    yield _sse(event)
+                try:
+                    for event in stream_agent(
+                        session.client(), model, engine_, messages,
+                        allowed=ASSISTANT_TOOLS,
+                        confirm=_may_run,
+                    ):
+                        yield _sse(event)
+                finally:
+                    # The Stop button closes this generator mid-turn, and
+                    # whatever the assistant already built is really built.
+                    # Persisting only on a clean finish left those charts on
+                    # the sheet with no record of them in the conversation,
+                    # so the next turn would answer "what did you build?"
+                    # from a history that never saw them. Runs on the way
+                    # out either way.
+                    session.persist()
 
-                session.persist()
                 after = engine_.get_script()
                 sheets = engine_.list_sheets()
 
@@ -376,11 +418,15 @@ def post_chats():
 
 @app.get("/api/chats/{chat_id}")
 def get_chat(chat_id: str):
-    """Reopen a saved chat: restores the model's context and the transcript."""
+    """One saved chat, read-only.
+
+    A GET is fair game for browser prefetching, so it must not touch the
+    live conversation - opening is the POST below.
+    """
     if not history.valid_id(chat_id):
         raise HTTPException(404, "No such chat.")
 
-    record = session.load_chat(chat_id)
+    record = history.load(chat_id)
     if record is None:
         raise HTTPException(404, "That chat could not be read.")
 
@@ -392,11 +438,56 @@ def get_chat(chat_id: str):
     }
 
 
+@app.post("/api/chats/{chat_id}/open")
+def post_open_chat(chat_id: str):
+    """Reopen a saved chat: restores the model's context and the transcript.
+
+    A POST because it mutates the server: the loaded chat becomes the live
+    conversation, and the app it was about is reopened when a different one
+    is open now.
+    """
+    if not history.valid_id(chat_id):
+        raise HTTPException(404, "No such chat.")
+
+    was_open = session.app_name()
+    record = session.load_chat(chat_id)
+    if record is None:
+        raise HTTPException(404, "That chat could not be read.")
+
+    return {
+        "chat_id": chat_id,
+        "title": record.get("title"),
+        "app": session.app_name(),
+        "app_switched": bool(session.app_name()) and session.app_name() != was_open,
+        # Set when the chat's app could not be reopened: the transcript is
+        # back, but the answers are about a different app than the open one.
+        "warning": record.get("app_mismatch"),
+        "transcript": transcript(record.get("messages")),
+    }
+
+
 @app.delete("/api/chats/{chat_id}")
 def delete_chat(chat_id: str):
     if not history.valid_id(chat_id):
         raise HTTPException(404, "No such chat.")
     session.delete_chat(chat_id)
+    return {"ok": True, "chat_id": session.chat_id(), "chats": history.listing()}
+
+
+@app.patch("/api/chats/{chat_id}")
+def patch_chat(chat_id: str, rename: Rename):
+    """Rename a chat. Only its name changes - not the conversation."""
+    if not history.valid_id(chat_id):
+        raise HTTPException(404, "No such chat.")
+
+    try:
+        record = history.rename(chat_id, rename.title)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+    if record is None:
+        raise HTTPException(404, "That chat could not be read.")
+
     return {"ok": True, "chat_id": session.chat_id(), "chats": history.listing()}
 
 
@@ -419,7 +510,11 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
-    logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(message)s")
+    # force=True: importing mcp_server above already configured logging for
+    # its stdio transport, which made this call a silent no-op - the plain
+    # format below never actually applied.
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr,
+                        format="%(message)s", force=True)
     # httpx logs every Ollama call at INFO, which buries our own output.
     logging.getLogger("httpx").setLevel(logging.WARNING)
 

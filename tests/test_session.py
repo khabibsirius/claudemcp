@@ -11,7 +11,7 @@ import pytest
 import mcp_server
 import session
 from ollama_client import OllamaError
-from qlik_engine import QlikNotConnectedError
+from qlik_engine import QlikEngineError, QlikNotConnectedError
 
 
 class FakeEngine:
@@ -58,6 +58,26 @@ def clean():
     session._state.update({"engine": None, "app_name": None, "client": None})
 
 
+@pytest.fixture
+def reconnecting(monkeypatch):
+    """One fake engine that comes back after a reconnect.
+
+    Changing app drops the session and opens a new one - Qlik Sense Desktop
+    keeps a single app open per engine and releases it only when the socket
+    holding it closes. Without this the second open would build a real
+    QlikEngine and reach for a live Qlik.
+    """
+    fake = FakeEngine()
+
+    def new_session():
+        fake.connected = True
+        return fake
+
+    monkeypatch.setattr(session, "QlikEngine", new_session)
+    session._state["engine"] = fake
+    return fake
+
+
 class TestConnection:
 
     def test_engine_errors_clearly_when_nothing_is_open(self, clean):
@@ -77,18 +97,23 @@ class TestConnection:
         session.open_app("data")
         assert fake.opened == ["data"]
 
-    def test_switching_app_reuses_the_connection(self, clean):
-        """A second websocket to the same Desktop would be refused."""
-        fake = FakeEngine()
-        session._state["engine"] = fake
+    def test_switching_app_starts_a_new_session(self, clean, reconnecting):
+        """Keeping the connection is what made the app impossible to change:
+        Qlik Sense Desktop keeps one app open per engine and frees it only
+        when the socket holding it closes, so the next open was refused with
+        "a document is already open"."""
         session.open_app("data")
+        dropped = []
+        reconnecting.close = lambda: dropped.append(True)
+
         session.open_app("data1")
-        assert fake.opened == ["data", "data1"]
+
+        assert dropped, "the session holding the old app was not dropped"
+        assert reconnecting.opened == ["data", "data1"]
         assert session.app_name() == "data1"
 
-    def test_switching_app_resets_the_conversation(self, clean):
+    def test_switching_app_resets_the_conversation(self, clean, reconnecting):
         """Otherwise it answers confidently about the previous app's fields."""
-        session._state["engine"] = FakeEngine()
         session.open_app("data")
         session.messages().append({"role": "user", "content": "about data"})
 
@@ -107,6 +132,93 @@ class TestConnection:
 
         assert session.connected() is False
         assert session.app_name() is None
+
+
+    def test_a_dead_connection_on_switch_tears_down(self, clean, monkeypatch):
+        """A connection-type failure means the old app is not usable either,
+        so the switch tears down to "nothing open". An app-level failure is
+        different - engine.open_app changes nothing until OpenDoc succeeds,
+        so that keeps the old app (pinned in test_web_app.py)."""
+        class RefusesSecond(FakeEngine):
+            def open_app(self, name):
+                if self.opened:
+                    raise QlikNotConnectedError("switch refused")
+                super().open_app(name)
+
+        refuser = RefusesSecond()
+        monkeypatch.setattr(session, "QlikEngine", lambda: refuser)
+        session._state["engine"] = refuser
+        session.open_app("data")
+
+        with pytest.raises(QlikNotConnectedError):
+            session.open_app("data1")
+
+        assert session.connected() is False
+        assert session.app_name() is None
+
+    def test_a_failed_open_on_a_fresh_connection_tears_down(self, clean):
+        """The old app_name outlived its connection: after the socket died,
+        a failed open on the replacement engine kept claiming that app, and
+        reopening it short-circuited as "already open" against a document
+        that was never opened - every later call then failed until restart."""
+        class RefusesEverything(FakeEngine):
+            def open_app(self, name):
+                raise QlikEngineError("no such app")
+
+        stale = FakeEngine()
+        session._state["engine"] = stale
+        session.open_app("data")
+        stale.connected = False          # the engine dropped the socket
+
+        with pytest.raises(QlikEngineError):
+            session.open_app("typo")
+
+        assert session.app_name() is None
+        assert session.connected() is False
+
+
+class TestChatFiling:
+
+    def test_switching_apps_files_the_old_chat_under_its_own_app(self, clean, tmp_path,
+                                                                 monkeypatch, reconnecting):
+        """The chat being replaced was asked against the app that was open
+        at the time. It used to be filed under the app being switched TO,
+        so reopening it restored it over the wrong data model - and the
+        mismatch check saw two matching names and said nothing."""
+        import history
+        monkeypatch.setattr(history, "HISTORY_DIR", str(tmp_path))
+
+        session.open_app("data")
+        session.messages().extend([
+            {"role": "user", "content": "about data"},
+            {"role": "assistant", "content": "answer"},
+        ])
+        about_data = session.chat_id()
+        session.persist()
+
+        session.open_app("data1")
+
+        assert history.load(about_data)["app"] == "data"
+
+    def test_reopening_a_chat_returns_to_the_app_it_was_about(self, clean, tmp_path,
+                                                             monkeypatch, reconnecting):
+        import history
+        monkeypatch.setattr(history, "HISTORY_DIR", str(tmp_path))
+
+        engine = reconnecting
+        session.open_app("data")
+        session.messages().extend([
+            {"role": "user", "content": "about data"},
+            {"role": "assistant", "content": "answer"},
+        ])
+        about_data = session.chat_id()
+        session.persist()
+        session.open_app("data1")
+
+        session.load_chat(about_data)
+
+        assert engine.opened[-1] == "data"
+        assert session.app_name() == "data"
 
 
 class TestModel:
@@ -141,9 +253,8 @@ class TestEverythingSharesOneSession:
 
         assert mcp_server._require_engine() is fake
 
-    def test_mcp_open_switches_the_shared_app(self, clean):
-        fake = FakeEngine()
-        session._state["engine"] = fake
+    def test_mcp_open_switches_the_shared_app(self, clean, reconnecting):
+        fake = reconnecting
         session.open_app("data")
 
         mcp_server.qlik_open("data1")

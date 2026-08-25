@@ -3,7 +3,7 @@
     python main.py
     python main.py --app Sales --instruction "3 charts, focus on region"
 
-The MCP server exposes the same flow as `qlik_build_ai_dashboard`; this is
+The MCP server exposes the same flow as `qlik_build_sheet`; this is
 the version you can run without an MCP client attached.
 """
 

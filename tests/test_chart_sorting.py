@@ -14,12 +14,12 @@ def hypercube(engine, chart_type, dimension="Region", expression="Sum([Sales])",
 
 class TestMeasureSorting:
 
-    @pytest.mark.parametrize("chart_type", ["barchart", "piechart", "table"])
+    @pytest.mark.parametrize("chart_type", ["barchart", "piechart", "sn-table"])
     def test_sorted_descending_by_the_measure(self, offline_engine, chart_type):
         cube = hypercube(offline_engine, chart_type)
         assert cube["qMeasures"][0]["qSortBy"] == {"qSortByNumeric": -1}
 
-    @pytest.mark.parametrize("chart_type", ["barchart", "piechart", "table"])
+    @pytest.mark.parametrize("chart_type", ["barchart", "piechart", "sn-table"])
     def test_the_measure_column_sorts_first(self, offline_engine, chart_type):
         """The sort only applies if the measure leads qInterColumnSortOrder."""
         cube = hypercube(offline_engine, chart_type)

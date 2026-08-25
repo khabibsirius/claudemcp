@@ -57,6 +57,19 @@ class TestNormaliseDerived:
             {"name": "Y", "expression": "Year([D]) as [My Year]"}
         ]) == [("Y", "Year([D])")]
 
+    def test_an_as_inside_a_string_literal_is_not_an_alias(self):
+        """The stripper once ate the tail of If(a, 'x as y'), leaving
+        If(a, 'x - a broken literal that failed the syntax check."""
+        expression = "If([Status] = 1, 'marked as new', 'old')"
+        assert normalise_derived([{"name": "Flag", "expression": expression}]) == [
+            ("Flag", expression)
+        ]
+
+    def test_an_alias_after_a_string_literal_is_still_removed(self):
+        assert normalise_derived([
+            {"name": "Flag", "expression": "If([A] = 1, 'x as y', 'z') as Flag"}
+        ]) == [("Flag", "If([A] = 1, 'x as y', 'z')")]
+
     def test_nothing_in_nothing_out(self):
         assert normalise_derived(None) == []
 
@@ -145,3 +158,23 @@ class TestToolExposesIt:
 
         assert "never tell the user that adding a calculated field is impossible" in SYSTEM_PROMPT
         assert "TO ADD A NEW OR CALCULATED COLUMN" in SYSTEM_PROMPT
+
+
+class TestAliasesInAnyLanguage:
+    """The alias stripper matched ASCII identifiers only, so a Russian one
+    was left in place and the generator added a second: the script came out
+    as "Year([Report Date]) as Год as [Год]" and failed the syntax check.
+    Field names in this app are as often Cyrillic as not."""
+
+    @pytest.mark.parametrize("alias", ["Year", "Год", "Yil", "год_отчёта"])
+    def test_an_alias_is_stripped_whatever_it_is_written_in(self, alias):
+        cleaned = normalise_derived(
+            [{"name": alias, "expression": f"Year([Report Date]) as {alias}"}]
+        )
+        assert cleaned == [(alias, "Year([Report Date])")]
+
+    def test_a_bracketed_alias_is_still_stripped(self):
+        cleaned = normalise_derived(
+            [{"name": "Год", "expression": "Year([Report Date]) as [Год]"}]
+        )
+        assert cleaned == [("Год", "Year([Report Date])")]

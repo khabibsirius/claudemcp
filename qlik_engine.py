@@ -34,10 +34,13 @@ import websocket
 
 from chart_specs import (
     CHART_TYPES,
+    COLOURS,
+    CROSS_TAB_TYPES,
     build_properties,
     chart_requirements,
     colour_block,
     default_size,
+    hypercube_owner,
     resolve_chart_type,
     resolve_colour,
 )
@@ -322,16 +325,31 @@ class QlikEngine:
         )
 
     def close(self):
-        """Close the websocket. Safe to call more than once."""
-        if self.ws is not None:
-            try:
-                self.ws.close()
-            except Exception as e:  # nothing useful to do about a failed close
-                log.debug("Ignoring error while closing the websocket: %s", e)
-            finally:
+        """Close the websocket. Safe to call more than once.
+
+        Takes the send lock so the socket is not torn down under a request
+        another thread has in flight - send() writes then reads, and closing
+        between the two turned a clean shutdown into a hung recv.
+
+        Identity is cleared even when the socket is already gone:
+        _await_response nulls `ws` when the engine drops the connection but
+        leaves the app/sheet handles, and a reconnect after such a close ran
+        against that stale identity - handles from a session that no longer
+        exists, and a grid cursor half way down a sheet that is not open.
+        """
+        with self._lock:
+            if self.ws is not None:
+                try:
+                    self.ws.close()
+                except Exception as e:  # nothing useful to do about a failed close
+                    log.debug("Ignoring error while closing the websocket: %s", e)
                 self.ws = None
-                self.app_handle = None
-                self.sheet_handle = None
+            self.app_handle = None
+            self.app_id = None
+            self.app_name = None
+            self.sheet_handle = None
+            self.sheet_id = None
+            self._reset_grid()
 
     def __enter__(self):
         self.connect()
@@ -365,9 +383,12 @@ class QlikEngine:
                 "params": params if params is not None else [],
             }
 
+            # A reset socket surfaces as a raw OSError (ConnectionResetError),
+            # not a WebSocketException, and used to escape untyped - callers
+            # that retry on QlikConnectionError never saw it.
             try:
                 self.ws.send(json.dumps(request))
-            except websocket.WebSocketException as e:
+            except (OSError, websocket.WebSocketException) as e:
                 raise QlikConnectionError(f"{method} could not be sent: {e}") from e
 
             return self._await_response(method, request_id)
@@ -495,12 +516,18 @@ class QlikEngine:
             response = self.send("OpenDoc", params=[target])
         except QlikEngineError as e:
             if "already open" in str(e).lower():
-                # Qlik Sense Desktop only allows one session per app, and its
-                # own UI holds one. Saying that outright saves a long hunt.
+                # Error 1002, and the engine's own words for it are "A
+                # document is already open" - ANY document. Qlik Sense
+                # Desktop keeps one app open per engine and has no way to
+                # close one, so this is usually not about app_name at all:
+                # something else is still holding a different app. Naming
+                # app_name as the thing to close sent people hunting for a
+                # window that was never open.
                 raise QlikEngineError(
-                    f"{app_name!r} is already open somewhere else. Close it in the "
-                    "Qlik Sense window (including its Data load editor tab) and try "
-                    "again - Desktop allows only one session per app."
+                    f"Could not open {app_name!r}: Qlik Sense Desktop keeps one "
+                    "app open at a time, and another one is open now. Close it "
+                    "wherever it is open - the Qlik Sense window, including its "
+                    "Data load editor tab - and try again."
                 ) from e
 
             known = ", ".join(sorted(a["name"] for a in apps if a["name"])[:20])
@@ -893,19 +920,18 @@ class QlikEngine:
 
         return response
 
-    def open_sheet(self, name_or_id):
-        """Make an existing sheet the target for new charts.
+    def find_sheet(self, name_or_id):
+        """The one sheet meant by a name or an id, or an error saying why not.
 
-        Without this, "add a chart to the Full Dashboard sheet" could only be
-        served by creating a second sheet with the same name - which is
-        exactly what happened, leaving duplicates and the chart nowhere the
-        person was looking.
+        Shared by opening and deleting, because "which sheet did they mean"
+        has to be answered the same way for both - and getting it wrong when
+        deleting costs a sheet rather than a misplaced chart.
         """
         self._require_app()
 
         wanted = (name_or_id or "").strip()
         if not wanted:
-            raise QlikEngineError("open_sheet needs a sheet name or id.")
+            raise QlikEngineError("A sheet name or id is needed.")
 
         sheets = self.list_sheets()
         match = next((s for s in sheets if s["qId"] == wanted), None)
@@ -932,6 +958,39 @@ class QlikEngine:
             raise QlikNotFoundError(
                 f"No sheet called {wanted!r}. This app has: {known or '(none)'}."
             )
+
+        return match
+
+    def delete_sheet(self, name_or_id):
+        """Remove a sheet and everything on it.
+
+        Destructive and not undoable from here: the charts go with the sheet.
+        Nothing could delete a sheet before this existed, which is worse than
+        it sounds - a session that built twenty sheets by mistake had no way
+        to undo any of it, and the model, asked to tidy up, said it had.
+        """
+        match = self.find_sheet(name_or_id)
+
+        self.send("DestroyObject", handle=self.app_handle, params=[match["qId"]])
+
+        if self.sheet_id == match["qId"]:
+            # The target for new charts just stopped existing.
+            self.sheet_handle = None
+            self.sheet_id = None
+            self._reset_grid()
+
+        return {"deleted": match["qId"], "title": match["title"],
+                "charts": match["chart_count"]}
+
+    def open_sheet(self, name_or_id):
+        """Make an existing sheet the target for new charts.
+
+        Without this, "add a chart to the Full Dashboard sheet" could only be
+        served by creating a second sheet with the same name - which is
+        exactly what happened, leaving duplicates and the chart nowhere the
+        person was looking.
+        """
+        match = self.find_sheet(name_or_id)
 
         handle = self._object_handle(match["qId"])
         properties = self.send("GetProperties", handle=handle)["result"]["qProp"]
@@ -992,7 +1051,7 @@ class QlikEngine:
     MIN_SHEET_ROWS = 4
 
     def _recompute_bounds(self, cells):
-        """Rewrite every cell's fractional bounds against the sheet's height.
+        """Rewrite the placed cells' fractional bounds against the sheet's height.
 
         Modern Qlik Sense positions sheet objects by fractional `bounds`
         (x/y/width/height, 0-1 relative to the sheet); the integer
@@ -1007,12 +1066,19 @@ class QlikEngine:
         quarter of the sheet on every dashboard.
         """
 
+        # Only cells this class placed carry the integer grid fields - a cell
+        # authored in the Qlik client has real fractional bounds and nothing
+        # else. Recomputing those from the 0/0/1/1 defaults stacked every
+        # hand-placed object at the origin the moment a chart was added here,
+        # so cells without col/row keep the bounds they came with.
+        placed = [c for c in cells if "col" in c and "row" in c]
+
         used_rows = max(
-            [int(c.get("row", 0)) + int(c.get("rowspan", 1)) for c in cells]
+            [int(c.get("row", 0)) + int(c.get("rowspan", 1)) for c in placed]
             + [self.MIN_SHEET_ROWS]
         )
 
-        for cell in cells:
+        for cell in placed:
             col = int(cell.get("col", 0))
             row = int(cell.get("row", 0))
             colspan = int(cell.get("colspan", 1))
@@ -1047,6 +1113,108 @@ class QlikEngine:
 
         self.send("SetProperties", handle=self.sheet_handle, params=[sheet_props])
 
+    # A cube's mode decides which page the data comes back on, and reading
+    # the wrong one makes a healthy chart look broken. A treemap is stacked
+    # (qMode 'K') and a grid chart is a tree (qMode 'T'); an audit that
+    # checked only qDataPages reported five working treemaps as empty. All
+    # four are checked, so the verdict does not depend on knowing the mode.
+    DATA_PAGE_KEYS = (
+        "qDataPages", "qPivotDataPages", "qStackedDataPages", "qTreeDataPages",
+    )
+
+    def chart_renders(self, object_id):
+        """Read a built chart back and say whether it will draw. (ok, detail).
+
+        Every check made before a chart is created asks about the DATA - does
+        the field exist, does the expression evaluate, does the query return
+        rows. Three separate bugs got past all of it by being about the
+        OBJECT: a table built from a property tree the client had outgrown, a
+        pivot with its dimensions on one axis, a box plot whose cube was
+        written to the top level when the component reads boxplotDef. In each
+        the engine computed the numbers perfectly and the client drew nothing.
+
+        So this asks the only question those had in common: is the data in the
+        place this object's own component reads it from?
+
+        Deliberately biased towards "ok". The caller acts on a false verdict
+        by deleting the chart, and an audit written the obvious way - checking
+        one page kind - was wrong about five charts out of eight. Anything
+        unreadable, unrecognised, or merely odd returns ok.
+        """
+        try:
+            handle = self._object_handle(object_id)
+            properties = self.send("GetProperties", handle=handle)["result"]["qProp"]
+            layout = self.send("GetLayout", handle=handle)["result"]["qLayout"]
+        except (QlikEngineError, KeyError) as e:
+            log.debug("Could not read %s back: %s", object_id, e)
+            return True, "could not be read back - assumed fine"
+
+        # Wherever this bundle keeps its cube. A box plot's lives under
+        # boxplotDef, and the layout mirrors the properties' shape.
+        owner, path = hypercube_owner(properties)
+        branch = layout if path == "qHyperCubeDef" else layout.get(
+            path.split(".", 1)[0], {}
+        )
+        hypercube = (branch or {}).get("qHyperCube")
+
+        if hypercube is None:
+            # The component may not surface a cube in its layout at all.
+            # Not evidence of a fault, and not worth deleting a chart over.
+            return True, f"no qHyperCube at {path!r} - assumed fine"
+
+        error = hypercube.get("qError")
+        if error:
+            return False, f"the engine reports an error on it: {error}"
+
+        size = hypercube.get("qSize") or {}
+        if not size.get("qcy"):
+            return False, "it computes no rows, so it draws an empty chart"
+
+        for key in self.DATA_PAGE_KEYS:
+            pages = hypercube.get(key) or []
+            if not pages:
+                continue
+            page = pages[0]
+            if page.get("qMatrix") or page.get("qData") or page.get("qNodes"):
+                return True, f"{key} carries data"
+
+        # qSize promises rows and not one page kind delivered them. This is
+        # the box plot's signature: the cube exists and the component's own
+        # branch of the tree is empty.
+        return False, (
+            f"it reports {size.get('qcy')} rows but returns no data on any "
+            f"page, so the component has nothing to draw"
+        )
+
+    def delete_chart(self, object_id):
+        """Remove one chart object and its cell in the sheet's grid.
+
+        DestroyObject alone leaves the sheet's `cells` list pointing at an id
+        that no longer exists - a hole the client renders as a broken tile,
+        which is a worse outcome than the chart this is meant to remove.
+        """
+        self._require_app()
+
+        placement = self.chart_sheet_map().get(object_id)
+        self.send("DestroyObject", handle=self.app_handle, params=[object_id])
+
+        if not placement:
+            return {"deleted": object_id, "sheet": None}
+
+        try:
+            handle = self._object_handle(placement["sheet_id"])
+            sheet_props = self.send("GetProperties", handle=handle)["result"]["qProp"]
+        except QlikEngineError as e:  # pragma: no cover - sheet vanished
+            log.debug("Could not tidy the sheet after deleting %s: %s", object_id, e)
+            return {"deleted": object_id, "sheet": placement["sheet"]}
+
+        cells = [c for c in (sheet_props.get("cells") or []) if c.get("name") != object_id]
+        sheet_props["cells"] = cells
+        self._recompute_bounds(cells)
+        self.send("SetProperties", handle=handle, params=[sheet_props])
+
+        return {"deleted": object_id, "sheet": placement["sheet"]}
+
     # ------------------------------------------------------------------
     # Charts
     # ------------------------------------------------------------------
@@ -1061,7 +1229,11 @@ class QlikEngine:
     # Charts where the interesting order is "biggest first". A line chart is
     # the exception: it reads along its dimension, so sorting it by value
     # turns a trend into noise.
-    MEASURE_SORTED_TYPES = ("barchart", "piechart", "table")
+    # "sn-table" rather than "table": the name resolves to the bundle object
+    # now, and this tuple is what gates both the descending sort and the
+    # top-N limit. Leaving the old name here would not error - it would
+    # quietly stop "Top 10 clients" being a top 10.
+    MEASURE_SORTED_TYPES = ("barchart", "piechart", "sn-table")
 
     def _build_hypercube(self, chart_type, dimensions, measure, expressions, limit=None):
         # A bare string here would be iterated character by character, so
@@ -1151,6 +1323,23 @@ class QlikEngine:
 
         if needs_cid:
             hypercube["qSuppressMissing"] = True
+
+        # A pivot table is the one type where the dimension LIST is not the
+        # whole story: qNoOfLeftDims decides how many of them go down the
+        # side, and the rest go across the top. Left unset, the split is
+        # whatever the engine defaults to - which is how a pivot ends up
+        # with every dimension stacked on one axis and nothing on the other,
+        # drawing an empty grid from data that is perfectly fine.
+        #
+        # Qlik's own client writes this explicitly for the other qMode
+        # charts it ships (the treemap carries qNoOfLeftDims: -1) and omits
+        # it here, so it is set rather than assumed.
+        if chart_type in CROSS_TAB_TYPES and n_dims:
+            # All but the last dimension down the side, the last across the
+            # top - the shape a person means by "pivot". With a single
+            # dimension that leaves one on the left and nothing on top,
+            # which draws as a plain table rather than as nothing.
+            hypercube["qNoOfLeftDims"] = max(1, n_dims - 1)
 
         return hypercube
 
@@ -1456,12 +1645,15 @@ class QlikEngine:
         errors = self.send("CheckScriptSyntax", handle=self.app_handle)["result"].get(
             "qErrors", []
         )
+        # qErrLen is the length of the offending text, not an error code -
+        # labelling it "code" put a meaningless number in every syntax report
+        # and sent people hunting for error codes that do not exist.
         return [
             {
                 "line": e.get("qLineInTab"),
                 "tab": e.get("qTabIx"),
                 "column": e.get("qColInLine"),
-                "code": e.get("qErrLen"),
+                "length": e.get("qErrLen"),
             }
             for e in errors
         ]
@@ -1482,10 +1674,18 @@ class QlikEngine:
         errors = self.check_script_syntax() if validate else []
         if errors:
             # Put back what was working rather than leaving the app holding a
-            # script that cannot run.
-            self.send("SetScript", handle=self.app_handle, params=[previous])
+            # script that cannot run. If the rollback itself fails, the
+            # syntax report must still come out - it is the only thing
+            # telling the caller what to fix, and an unguarded rollback error
+            # used to replace it entirely.
+            applied = "was not applied"
+            try:
+                self.send("SetScript", handle=self.app_handle, params=[previous])
+            except QlikEngineError as e:
+                log.warning("Could not restore the previous script: %s", e)
+                applied = "the previous script could not be restored"
             raise QlikEngineError(
-                f"Script has {len(errors)} syntax error(s) and was not applied: {errors}"
+                f"Script has {len(errors)} syntax error(s) and {applied}: {errors}"
             )
 
         return previous
@@ -1535,6 +1735,11 @@ class QlikEngine:
                 "log_file": reload_result.get("qScriptLogFile"),
                 "memory_constrained": bool(reload_result.get("qEndedWithMemoryConstraint")),
             }
+        except QlikConnectionError:
+            # A timeout or dropped socket is not "this engine lacks
+            # DoReloadEx". Falling back here kicked off a SECOND full reload
+            # while the first was often still running server-side.
+            raise
         except QlikEngineError as e:
             log.debug("DoReloadEx unavailable (%s); falling back to DoReload", e)
             response = self.send(
@@ -1600,7 +1805,11 @@ class QlikEngine:
     @staticmethod
     def _describe_chart(object_id, properties):
         """The few things about a chart someone would want to change."""
-        hypercube = properties.get("qHyperCubeDef", {}) or {}
+        # A box plot keeps its cube under boxplotDef, so reading the top
+        # level would report it as having no dimensions and no measures -
+        # and the assistant would then describe an empty chart to the user.
+        owner, _path = hypercube_owner(properties)
+        hypercube = owner.get("qHyperCubeDef", {}) or {}
 
         dimensions = [
             (d.get("qDef", {}).get("qFieldDefs") or [""])[0]
@@ -1748,11 +1957,17 @@ class QlikEngine:
 
         if colour:
             resolved = resolve_colour(colour)
-            if resolved:
-                properties["color"] = {
-                    **(properties.get("color") or {}), **colour_block(resolved)
-                }
-                changed.append("colour")
+            if not resolved:
+                # Dropping an unrecognised name silently ended in "Nothing to
+                # change", which read as "the colour setting does nothing".
+                raise QlikEngineError(
+                    f"Unknown colour {colour!r}. Use a #rrggbb value, 'multi', "
+                    f"or one of: {', '.join(sorted(set(COLOURS)))}."
+                )
+            properties["color"] = {
+                **(properties.get("color") or {}), **colour_block(resolved)
+            }
+            changed.append("colour")
 
         if not changed:
             return {"id": object_id, "changed": [], "note": "Nothing to change."}

@@ -39,7 +39,26 @@ NON_DATA = {
 def unwrap(properties):
     """Some bundles nest everything under `initial`; use what's inside."""
     if set(properties) == {"initial"} and isinstance(properties["initial"], dict):
-        return properties["initial"]
+        return unquote(properties["initial"])
+    return unquote(properties)
+
+
+def unquote(properties):
+    """Strip quotes a bundle wrote INTO a string value.
+
+    A few bundles declare their version as the six characters "0.8.13" -
+    quotes included - and copying that through verbatim sent the engine a
+    doubly-quoted version string. Only whole-value quoting is stripped; a
+    quote in the middle of a label is the label's own.
+    """
+    if isinstance(properties, dict):
+        return {key: unquote(value) for key, value in properties.items()}
+    if isinstance(properties, list):
+        return [unquote(value) for value in properties]
+    if isinstance(properties, str) and len(properties) > 1:
+        for quote in ('"', "'"):
+            if properties.startswith(quote) and properties.endswith(quote):
+                return properties[1:-1]
     return properties
 
 

@@ -152,6 +152,20 @@ class TestTopUp:
         design(client, "2 pie charts")
         assert len(client.instructions) == 2
 
+    def test_no_dangling_clause_when_nothing_was_buildable(self):
+        """When every chart was rejected the retry used to end with
+        'Do not repeat any of these either: ' pointing at nothing."""
+        client = ScriptedClient([
+            spec(pie("Type"), pie("Id")),
+            spec(pie("Region"), pie("agent")),
+        ])
+
+        design(client, "2 pie charts")
+        retry = client.instructions[1]
+
+        assert "Do not repeat any of these either" not in retry
+        assert not retry.rstrip().endswith(":")
+
 
 class TestHistoryTrimming:
     """Tool results are large and a local model's context is small.

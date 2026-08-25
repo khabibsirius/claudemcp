@@ -59,6 +59,37 @@ class TestTheGapThatCausedIt:
         dimensions, measures = chart_requirements(chart_type)
         assert dimensions[0] > 1 or measures[0] > 1
 
+    @pytest.mark.parametrize("chart_type", [
+        "qlik-sankey-chart-ext", "mekkochart", "sn-grid-chart",
+        "qlik-network-chart",
+    ])
+    def test_a_single_dimension_spec_for_one_is_rejected(self, chart_type):
+        """The regression: min_dims was unpacked and never enforced, so
+        these passed validation with one dimension and built charts that
+        rendered blank - the exact failure the measure check prevents."""
+        from dashboard_builder import normalize_visualization, validate_visualization
+
+        viz = normalize_visualization({
+            "type": chart_type, "title": "Flow", "dimension": "Region",
+            "measure_expression": "Sum([SUM])",
+        })
+        error = validate_visualization(viz, {"Region", "SUM"})
+
+        assert error is not None
+        assert "dimension" in error
+        assert "create_chart" in error, "the fix must name a tool that works"
+
+    def test_the_design_prompt_does_not_offer_what_it_cannot_build(self):
+        """The regression: the 'you may also use' list named mekkochart and
+        qlik-sankey-chart-ext two rules above the rule forbidding exactly
+        those - and distributionplot, which is not a buildable type at all."""
+        from prompts import DASHBOARD_SYSTEM_PROMPT
+
+        offered = DASHBOARD_SYSTEM_PROMPT.split("Do NOT use")[0]
+        assert "mekkochart" not in offered
+        assert "qlik-sankey-chart-ext" not in offered
+        assert "distributionplot" not in DASHBOARD_SYSTEM_PROMPT
+
 
 class TestCreateChartTool:
 

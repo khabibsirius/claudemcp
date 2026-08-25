@@ -7,13 +7,16 @@ a specific, silent failure, so a future edit can't quietly drop one.
 
 import pytest
 
+from chart_defaults import CHART_DEFAULTS
 from chart_specs import (
     CARTESIAN_TYPES,
     CHART_TYPES,
     DEFAULT_SIZES,
     NEBULA_TYPES,
     build_properties,
+    hypercube_owner,
     default_size,
+    resolve_chart_type,
 )
 
 HYPERCUBE = {"qDimensions": [], "qMeasures": [], "qInitialDataFetch": []}
@@ -39,7 +42,35 @@ class TestCommonShape:
 
     @pytest.mark.parametrize("chart_type", CHART_TYPES)
     def test_carries_the_hypercube(self, chart_type):
-        assert "qHyperCubeDef" in props(chart_type)
+        """Wherever the bundle keeps it.
+
+        This used to assert the top level, which is true of every type but
+        one: a box plot keeps its cube at boxplotDef.qHyperCubeDef and reads
+        nothing from the top. Writing it to the top satisfied this test and
+        produced Qlik's "Incomplete visualization" in the app - the assertion
+        was measuring the wrong place, so it passed while the chart failed.
+        """
+        owner, _path = hypercube_owner(props(chart_type))
+        assert "qHyperCubeDef" in owner
+
+    @pytest.mark.parametrize("chart_type", CHART_TYPES)
+    def test_the_dimensions_reach_the_cube_the_component_reads(self, chart_type):
+        """The cube being present is not the same as ours being in it."""
+        cube = {"qDimensions": [{"qDef": {"qFieldDefs": ["Region"]}}],
+                "qMeasures": [{"qDef": {"qDef": "=Sum([Sales])"}}]}
+        properties = build_properties(chart_type, "OBJ_1", "t", cube)
+        owner, _path = hypercube_owner(properties)
+        assert owner["qHyperCubeDef"]["qDimensions"] == cube["qDimensions"]
+        assert owner["qHyperCubeDef"]["qMeasures"] == cube["qMeasures"]
+
+    def test_only_the_box_plot_nests_its_cube(self):
+        """A canary: if a future bundle nests one too, this says so rather
+        than the chart silently rendering incomplete."""
+        nested = [
+            t for t in CHART_TYPES
+            if hypercube_owner(props(t))[1] != "qHyperCubeDef"
+        ]
+        assert nested == ["boxplot"]
 
     @pytest.mark.parametrize("chart_type", CHART_TYPES)
     def test_has_a_default_size(self, chart_type):
@@ -94,36 +125,52 @@ class TestPieChart:
 
 
 class TestTable:
-    """sn-table walks `columnOrder` to render its body. Without it the table
-    draws its title and an empty white pane - the data is there, nothing is
-    shown. Same class of failure as the pie chart."""
+    """A table is built from the bundle's tree, not a hand-written one.
 
-    def table_props(self, dimensions=1, measures=1):
+    The hand-written tree that used to serve "table" was pinned at version
+    2.5.0 while the installed bundle had moved to 6.19.0. The object it built
+    computed a full qMatrix and the client drew an empty pane - confirmed in
+    a real app, side by side with an sn-table over the same field that
+    rendered correctly. The name is an alias onto sn-table now, and these
+    tests pin that: what a table needs to render comes from the bundle.
+    """
+
+    def table_props(self, dimensions=1, measures=1, name="table"):
         hypercube = {
             "qDimensions": [{"qDef": {}}] * dimensions,
             "qMeasures": [{"qDef": {}}] * measures,
         }
-        return build_properties("table", "TAB_1", "Sales by Order", hypercube), hypercube
+        return build_properties(
+            resolve_chart_type(name), "TAB_1", "Sales by Order", hypercube
+        ), hypercube
+
+    def test_the_word_table_builds_an_sn_table(self):
+        assert resolve_chart_type("table") == "sn-table"
+
+    def test_the_object_is_typed_as_sn_table(self):
+        """qType is what the client dispatches on; 'table' drew nothing."""
+        properties, _ = self.table_props()
+        assert properties["qInfo"]["qType"] == "sn-table"
+        assert properties["visualization"] == "sn-table"
 
     def test_declares_column_order(self):
+        """sn-table walks columnOrder to render its body."""
         properties, _ = self.table_props()
-        assert properties["columnOrder"] == [0, 1]
+        assert properties["qHyperCubeDef"]["qColumnOrder"] == [0, 1]
 
     def test_column_widths_match_the_column_count(self):
         properties, _ = self.table_props(dimensions=2, measures=2)
-        assert properties["columnOrder"] == [0, 1, 2, 3]
+        assert properties["qHyperCubeDef"]["qColumnOrder"] == [0, 1, 2, 3]
         assert properties["columnWidths"] == [-1] * 4  # -1 = auto
 
-    def test_sets_the_hypercube_column_order_too(self):
-        """The property-level list drives rendering; the hypercube-level one
-        drives which columns the engine actually returns."""
-        _, hypercube = self.table_props()
-        assert hypercube["qColumnOrder"] == [0, 1]
-        assert hypercube["qMode"] == "S"
+    def test_carries_the_bundle_version_not_a_pinned_one(self):
+        """The staleness that caused this: a hand-kept version string."""
+        properties, _ = self.table_props()
+        assert properties["version"] == CHART_DEFAULTS["sn-table"]["version"]
 
     def test_has_the_table_chrome(self):
         properties, _ = self.table_props()
-        for key in ("totals", "scrolling", "multiline", "search"):
+        for key in ("totals", "usePagination", "components"):
             assert key in properties, f"table is missing {key}"
 
     def test_does_not_get_cartesian_axis_config(self):
@@ -136,8 +183,16 @@ class TestTable:
             "qMeasures": [{"qDef": {}}],
             "qInterColumnSortOrder": [1, 0],
         }
+        properties = build_properties("sn-table", "TAB_1", "t", hypercube)
+        assert properties["qHyperCubeDef"]["qInterColumnSortOrder"] == [1, 0]
+
+    def test_the_callers_hypercube_is_not_mutated(self):
+        """The regression: the setdefaults wrote into the caller's dict, so
+        a hypercube reused for a second chart arrived already carrying this
+        table's column order and sort."""
+        hypercube = {"qDimensions": [{"qDef": {}}], "qMeasures": [{"qDef": {}}]}
         build_properties("table", "TAB_1", "t", hypercube)
-        assert hypercube["qInterColumnSortOrder"] == [1, 0]
+        assert set(hypercube) == {"qDimensions", "qMeasures"}
 
 
 class TestTemplateIsolation:

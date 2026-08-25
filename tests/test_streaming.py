@@ -238,3 +238,40 @@ class TestStreamEndpoint:
         frames = self.frames(response)
         assert frames[-1]["type"] == "error"
         assert "model died" in frames[-1]["message"]
+
+
+class TestMalformedStreamArguments:
+    """Broken JSON in a streamed tool call used to become {} silently, and
+    the tool then ran with every default - write_script wrote an empty tab
+    over the script the model had just composed."""
+
+    def test_the_tool_is_refused_with_the_reason(self, monkeypatch):
+        from chat_tools import FUNCTIONS
+
+        ran = []
+        monkeypatch.setitem(
+            FUNCTIONS, "query", lambda engine, **kw: ran.append(kw) or {"ok": True}
+        )
+
+        messages = []
+        client = StreamingClient([
+            tool_chunk("query", '{"limit": bro'), text_chunks("Sorry."),
+        ])
+        events = list(stream_agent(client, "m", FakeEngine(), messages))
+
+        assert ran == [], "the tool ran despite unparseable arguments"
+        result = next(e for e in events if e["type"] == "tool_result")
+        assert result["ok"] is False
+        assert "not valid JSON" in result["detail"]
+
+    def test_results_carry_the_tool_name(self, monkeypatch):
+        """Without tool_name on the role:'tool' message, a turn with two
+        calls leaves the model matching results to calls by position."""
+        from chat_tools import FUNCTIONS
+
+        monkeypatch.setitem(FUNCTIONS, "query", lambda engine, **kw: {"rows": []})
+        messages = []
+        client = StreamingClient([tool_chunk("query"), text_chunks("Done.")])
+        list(stream_agent(client, "m", FakeEngine(), messages))
+
+        assert messages[1]["tool_name"] == "query"

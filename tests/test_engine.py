@@ -3,9 +3,11 @@
 import pytest
 
 from qlik_engine import (
+    QlikConnectionError,
     QlikEngine,
     QlikEngineError,
     QlikNotConnectedError,
+    QlikNotFoundError,
 )
 
 from conftest import FakeEngineSocket
@@ -70,6 +72,18 @@ class TestSend:
     def test_raises_when_not_connected(self, offline_engine):
         with pytest.raises(QlikNotConnectedError):
             offline_engine.send("GetAllInfos")
+
+    def test_a_reset_socket_raises_a_connection_error(self, engine):
+        """A raw ConnectionResetError from the OS used to escape untyped -
+        the send path caught only WebSocketException, so callers handling
+        QlikConnectionError never saw the dropped socket."""
+        def dies(request):
+            raise ConnectionResetError("peer reset")
+
+        engine.ws.handlers = {"Noop": dies}
+
+        with pytest.raises(QlikConnectionError):
+            engine.send("Noop")
 
 
 class TestSessionObjects:
@@ -200,8 +214,9 @@ class TestAppResolution:
         assert engine.ws.requests_for("OpenDoc")[0]["params"] == ["data"]
 
     def test_already_open_says_what_to_do(self, engine):
-        """Desktop allows one session per app and its own UI holds one, so
-        this is the error you hit most and the least self-explanatory."""
+        """Error 1002 is "A document is already open" - ANY document. Qlik
+        Sense Desktop keeps one app open per engine, so naming the app being
+        asked for sent people hunting for a window that was never open."""
         engine.ws.handlers = {
             "GetDocList": {"qDocList": [{"qDocId": "1", "qTitle": "data1"}]},
             "OpenDoc": {"error": {"message": "App already open"}},
@@ -211,8 +226,9 @@ class TestAppResolution:
             engine.open_app("data1")
 
         message = str(excinfo.value)
-        assert "already open" in message
-        assert "Close it in the Qlik Sense window" in message
+        assert "one app open at a time" in message
+        assert "another one is open now" in message
+        assert "Qlik Sense window" in message
 
     def test_open_app_error_lists_what_is_available(self, engine):
         engine.ws.handlers = {
@@ -333,6 +349,30 @@ class TestLifecycle:
         assert engine.app_handle is None
         assert engine.sheet_handle is None
 
+    def test_close_clears_app_identity_and_grid_state(self, engine):
+        """A reconnect after close() used to run against the previous
+        session's app id and a grid cursor half way down a sheet that was no
+        longer open."""
+        engine.app_id = "c:/apps/x.qvf"
+        engine.sheet_id = "SH_1"
+        engine._next_row = 8
+
+        engine.close()
+
+        assert engine.app_id is None
+        assert engine.app_name is None
+        assert engine.sheet_id is None
+        assert (engine._next_col, engine._next_row) == (0, 0)
+
+    def test_close_clears_identity_even_when_the_socket_is_already_gone(self, engine):
+        """_await_response nulls `ws` when the engine drops the connection
+        but leaves the handles - close() must still clear them or the next
+        connect inherits a dead session's identity."""
+        engine.ws = None
+        engine.close()
+        assert engine.app_handle is None
+        assert engine.app_name is None
+
     def test_context_manager_closes(self):
         engine = QlikEngine(autoconnect=False)
         engine.ws = FakeEngineSocket()
@@ -368,3 +408,194 @@ class TestLifecycle:
         )
         with pytest.raises(QlikEngineError, match="client_key.pem"):
             engine.connect()
+
+
+class TestReloadFallback:
+    """DoReloadEx falls back to DoReload only when the METHOD is the problem.
+
+    QlikConnectionError subclasses QlikEngineError, so a DoReloadEx that
+    merely timed out used to trigger the fallback too - starting a second
+    full reload while the first was often still running server-side.
+    """
+
+    def test_a_connection_error_does_not_start_a_second_reload(self, engine):
+        def dies(request):
+            raise ConnectionResetError("peer reset")
+
+        engine.ws.handlers = {"DoReloadEx": dies, "DoReload": {"qReturn": True}}
+
+        with pytest.raises(QlikConnectionError):
+            engine.reload_data()
+
+        assert engine.ws.requests_for("DoReload") == []
+
+    def test_a_genuine_method_error_still_falls_back(self, engine):
+        engine.ws.handlers = {
+            "DoReloadEx": {"error": {"message": "Method not found"}},
+            "DoReload": {"qReturn": True},
+        }
+
+        result = engine.reload_data()
+
+        assert result["success"] is True
+        assert len(engine.ws.requests_for("DoReload")) == 1
+
+
+class TestScriptSyntaxReport:
+    """qErrLen is the LENGTH of the offending text, not an error code.
+
+    Reporting it under the key "code" put a meaningless number in every
+    set_script failure and sent people hunting for Qlik error codes that do
+    not exist.
+    """
+
+    def test_reports_length_not_a_fake_error_code(self, engine):
+        engine.ws.handlers = {"CheckScriptSyntax": {"qErrors": [
+            {"qLineInTab": 3, "qTabIx": 0, "qColInLine": 7, "qErrLen": 5},
+        ]}}
+
+        errors = engine.check_script_syntax()
+
+        assert errors == [{"line": 3, "tab": 0, "column": 7, "length": 5}]
+
+
+class TestSetScriptRollbackFailure:
+    """The rollback after a failed syntax check can itself fail. When it
+    did, the rollback's error replaced the syntax report - the one thing
+    telling the caller what to fix in the script."""
+
+    def test_the_syntax_report_survives_a_failed_rollback(self, engine):
+        def set_script(request):
+            if request["params"] == ["GOOD"]:
+                return {"error": {"message": "engine went away"}}
+            return {}
+
+        engine.ws.handlers = {
+            "GetScript": {"qScript": "GOOD"},
+            "SetScript": set_script,
+            "CheckScriptSyntax": {"qErrors": [{"qLineInTab": 3, "qTabIx": 0}]},
+        }
+
+        with pytest.raises(QlikEngineError) as excinfo:
+            engine.set_script("BROKEN (((")
+
+        message = str(excinfo.value)
+        assert "syntax error" in message
+        assert "could not be restored" in message
+
+
+class TestClientAuthoredCells:
+    """A sheet built by hand in the Qlik client stores real fractional
+    bounds and no integer col/row fields. Recomputing every cell from the
+    0/0/1/1 defaults collapsed such a layout - everything minimised and
+    stacked at the origin - the moment a chart was added here."""
+
+    def test_bounds_without_grid_fields_are_preserved(self, offline_engine):
+        authored = {
+            "name": "hand", "type": "barchart",
+            "bounds": {"x": 0.5, "y": 0.25, "width": 0.5, "height": 0.75},
+        }
+        placed = {
+            "name": "new", "type": "kpi",
+            "col": 0, "row": 0, "colspan": 6, "rowspan": 3,
+        }
+        cells = [authored, placed]
+
+        offline_engine._recompute_bounds(cells)
+
+        assert authored["bounds"] == {"x": 0.5, "y": 0.25, "width": 0.5, "height": 0.75}
+        assert placed["bounds"]["width"] == 0.25
+
+
+class TestUpdateChartColour:
+    """An unknown colour name used to resolve to None and be dropped, so
+    the caller was told "Nothing to change" instead of what was wrong."""
+
+    def test_an_unknown_colour_is_an_error_not_a_no_op(self, engine):
+        engine.ws.handlers = {
+            "GetObject": {"qReturn": {"qHandle": 9}},
+            "GetProperties": {"qProp": {"qInfo": {"qType": "barchart"}}},
+            "SetProperties": {},
+        }
+
+        with pytest.raises(QlikEngineError, match="chartreuse"):
+            engine.update_chart("OBJ_1", colour="chartreuse")
+
+        assert engine.ws.requests_for("SetProperties") == []
+
+
+class TestDeletingASheet:
+    """Nothing could remove a sheet before this existed. A session that built
+    twenty sheets by mistake had no way to undo any of it - and the model,
+    asked to tidy them up, reported that it had."""
+
+    SHEETS = {"qLayout": {"qAppObjectList": {"qItems": [
+        {"qInfo": {"qId": "SH_aaa"},
+         "qData": {"title": "Executive Overview", "cells": [{}, {}]}},
+        {"qInfo": {"qId": "SH_bbb"}, "qData": {"title": "Spare", "cells": []}},
+    ]}}}
+
+    def sheets(self, engine):
+        engine.ws.handlers = {
+            "CreateSessionObject": {"qReturn": {"qHandle": 9, "qGenericId": "L1"}},
+            "GetLayout": self.SHEETS,
+            "DestroySessionObject": {"qReturn": True},
+            "DestroyObject": {"qSuccess": True},
+        }
+
+    def test_removes_the_sheet_by_id(self, engine):
+        self.sheets(engine)
+
+        result = engine.delete_sheet("Executive Overview")
+
+        destroyed = engine.ws.requests_for("DestroyObject")
+        assert [r["params"] for r in destroyed] == [["SH_aaa"]]
+        assert result == {"deleted": "SH_aaa", "title": "Executive Overview",
+                          "charts": 2}
+
+    def test_an_id_works_as_well_as_a_title(self, engine):
+        self.sheets(engine)
+        assert engine.delete_sheet("SH_bbb")["deleted"] == "SH_bbb"
+
+    def test_an_unknown_sheet_is_not_found(self, engine):
+        self.sheets(engine)
+
+        with pytest.raises(QlikNotFoundError):
+            engine.delete_sheet("Nowhere")
+
+        assert engine.ws.requests_for("DestroyObject") == []
+
+    def test_a_blank_name_deletes_nothing(self, engine):
+        self.sheets(engine)
+
+        with pytest.raises(QlikEngineError):
+            engine.delete_sheet("   ")
+
+        assert engine.ws.requests_for("DestroyObject") == []
+
+    def test_two_sheets_of_the_same_name_are_refused(self, engine):
+        """Guessing which one costs a sheet, not a misplaced chart."""
+        engine.ws.handlers = {
+            "CreateSessionObject": {"qReturn": {"qHandle": 9, "qGenericId": "L1"}},
+            "GetLayout": {"qLayout": {"qAppObjectList": {"qItems": [
+                {"qInfo": {"qId": "SH_1"}, "qData": {"title": "Same", "cells": []}},
+                {"qInfo": {"qId": "SH_2"}, "qData": {"title": "Same", "cells": []}},
+            ]}}},
+            "DestroySessionObject": {"qReturn": True},
+            "DestroyObject": {"qSuccess": True},
+        }
+
+        with pytest.raises(QlikEngineError, match="SH_1"):
+            engine.delete_sheet("Same")
+
+        assert engine.ws.requests_for("DestroyObject") == []
+
+    def test_deleting_the_open_sheet_clears_it_as_the_target(self, engine):
+        """New charts would otherwise be built onto a sheet that is gone."""
+        self.sheets(engine)
+        engine.sheet_id = "SH_aaa"
+        engine.sheet_handle = 5
+
+        engine.delete_sheet("SH_aaa")
+
+        assert engine.sheet_id is None and engine.sheet_handle is None
