@@ -4,7 +4,7 @@ Connect a local LLM to a Qlik Sense app and have it inspect the data model
 and build sheets and charts — what Qlik Cloud gives you with a hosted
 assistant, running entirely on your own machine.
 
-Today it targets **Qlik Sense Desktop + Ollama**. Enterprise on-premise is
+Today it targets **Qlik Sense Desktop + any OpenAI-compatible model endpoint**. Enterprise on-premise is
 implemented behind the same interface (see [Enterprise](#enterprise-on-premise)).
 
 ## One command
@@ -72,7 +72,7 @@ session.py          one Qlik session and conversation per person
 qlik_engine.py      websocket JSON-RPC client for the Qlik Engine API
 chart_specs.py      property trees for each native chart type
 prompts.py          system prompt + field-list prompt
-ollama_client.py    local LLM calls, constrained to JSON
+llm.py              the model client, constrained to JSON where needed
 dashboard_builder.py  design -> validate against real fields -> build
 insights.py         reads a sheet's numbers and does the arithmetic itself
 glossary.py         your own definitions, prepended to the system prompt
@@ -131,8 +131,8 @@ You'll need:
 
 - An app already loaded with data, named to match `APP_NAME`
   (`python list_sheets.py --apps` shows what's available).
-- **Ollama** running with the model in `.env` pulled, e.g.
-  `ollama pull phi4:14b` — only for the AI-design features, not the
+- **A model endpoint** that speaks the OpenAI API, set in `.env` as
+  `OPENAI_BASE_URL` / `OPENAI_MODEL` — only for the AI-design features, not the
   low-level MCP tools.
 
 ### Your own definitions
@@ -335,7 +335,7 @@ assistant writes is what Qlik runs.
 It behaves identically against Desktop and Enterprise on-premise, because the
 only thing that differs between them is how the websocket is opened.
 
-Nothing leaves the machine: browser → this server → Qlik and Ollama.
+Browser → this server → Qlik and your model endpoint.
 
 ## Usage — chatbot
 
@@ -351,7 +351,7 @@ python chat.py --app data --model gemma4:26b
 > build me a sales dashboard
 ```
 
-Everything runs on your machine: a local Ollama model drives the Qlik Engine
+The model you point it at drives the Qlik Engine
 API directly. It shows each action as it takes it, and asks before anything
 that would replace your data.
 
@@ -359,10 +359,10 @@ that would replace your data.
 `phi4` and `deepseek-coder` return a 400 for tools. If the configured model
 can't, `chat.py` and `web_app.py` pick an installed one that can and say so,
 rather than refusing to start. Set your own with `CHAT_MODEL` in `.env`,
-separate from `OLLAMA_MODEL` so the dashboard designer (which only needs
+separate from `OPENAI_MODEL` so the dashboard designer (which only needs
 JSON, not tools) can keep using a different one.
 
-Check any model with `ollama show <model>` and look for `tools` under
+The endpoint's `/v1/models` list is what the picker reads; look for `tools` under
 capabilities — that's read from metadata, so it doesn't load the model.
 
 Two things keep a local model from doing damage:
@@ -495,7 +495,7 @@ chat.py`, where a person is present, destructive actions ask first, and the
 change is recorded against them.
 
 `qlik_build_sheet` takes it either way. Pass `instruction="sales by region
-and customer segment, 4 charts"` and the local Ollama model designs it by
+and customer segment, 4 charts"` and the model designs it by
 reading the data model itself — no JSON to write, nothing else required.
 Pass `charts=[...]` when the caller wants to choose precisely; a capable
 assistant will get a better result that way than the local model does.
@@ -615,7 +615,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-The suite runs against a fake websocket — no Qlik or Ollama needed.
+The suite runs against a fake websocket — no Qlik and no model endpoint needed.
 
 ## Notes / limitations
 

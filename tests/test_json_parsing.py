@@ -2,9 +2,9 @@ import json
 
 import pytest
 
-from ollama_client import (
-    OllamaClient,
-    OllamaError,
+from llm import (
+    ModelError,
+    OpenAICompatibleClient,
     extract_json_object,
     parse_json_reply,
     strip_code_fences,
@@ -67,19 +67,19 @@ class TestParseJsonReply:
             parse_json_reply("absolutely not json")
 
 
-class ScriptedClient(OllamaClient):
+class ScriptedClient(OpenAICompatibleClient):
     def __init__(self, replies):
-        self.model = "test-model"
-        self.host = ""
-        self.timeout = 1
-        self.temperature = 0.0
-        self._client = None
+        super().__init__(base_url="http://127.0.0.1:9/v1",
+                         default_model="test-model")
         self._replies = list(replies)
         self.conversations = []
 
-    def _chat(self, messages, json_mode=False):
-        self.conversations.append([dict(m) for m in messages])
-        return self._replies.pop(0)
+    def chat(self, model=None, messages=None, tools=None, options=None,
+             stream=False, **ignored):
+        self.conversations.append([dict(m) for m in messages or []])
+        return {"message": {"role": "assistant",
+                            "content": self._replies.pop(0),
+                            "tool_calls": []}, "done": True}
 
 
 class TestAskJsonRetries:
@@ -102,7 +102,7 @@ class TestAskJsonRetries:
 
     def test_gives_up_after_the_retry_budget(self):
         client = ScriptedClient(["bad", "still bad", "nope"])
-        with pytest.raises(OllamaError) as excinfo:
+        with pytest.raises(ModelError) as excinfo:
             client.ask_json("design it", retries=2)
         assert "did not return valid JSON after 3 attempts" in str(excinfo.value)
 

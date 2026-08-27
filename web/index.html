@@ -589,9 +589,9 @@ const STRINGS = {
     stopped: "Stopped.",
     stoppedKept: "Stopped. Anything already done is still there.",
     askPlaceholder: "Ask for anything: load the csvs in my downloads folder and merge them / build me a sales dashboard / what is total sales by market?",
-    askPlaceholderOffline: "Assistant unavailable - start Ollama, then just type here again.",
+    askPlaceholderOffline: "Assistant unavailable - {where} could not be reached. Try again once it is back.",
     hint: "One box for everything - loading, cleaning, dashboards, questions. The assistant writes the script; you press Load data to run it.",
-    hintOffline: "Ollama isn't running, so the assistant is off. Everything else - the editor, Load data, Save - still works.",
+    hintOffline: "The assistant is off because {where} could not be reached. Everything else - the editor, Load data, Save - still works.",
     reconnect: "Reconnect",
     reconnecting: "Reconnecting…",
     reconnected: "Connected again.",
@@ -641,7 +641,7 @@ const STRINGS = {
     couldNotStartChat: "Could not start a new chat: {error}",
     couldNotDeleteChat: "Could not delete that chat: {error}",
     couldNotRenameChat: "Could not rename that chat: {error}",
-    cloudModelConfirm: "This is a cloud model. Field names, sample values and query results will be sent to Ollama's servers instead of staying on this machine.\n\nContinue?",
+    cloudModelConfirm: "This is a cloud model. Field names, sample values and query results will leave this machine.\n\nContinue?",
     qlikCacheNote: "Saved to the app file{stamp}. Qlik Sense Desktop won't show new sheets in a window that already had this app open — close the app in Qlik and open it again. Don't press Save in Qlik first: its older copy would overwrite this.",
   },
 
@@ -677,9 +677,9 @@ const STRINGS = {
     stopped: "Остановлено.",
     stoppedKept: "Остановлено. Всё, что уже сделано, осталось на месте.",
     askPlaceholder: "Спросите что угодно: загрузите csv из папки загрузок и объедините их / постройте дашборд по продажам / какова сумма продаж по рынкам?",
-    askPlaceholderOffline: "Ассистент недоступен — запустите Ollama и напишите снова.",
+    askPlaceholderOffline: "Ассистент недоступен — не удалось связаться с {where}. Напишите снова, когда связь появится.",
     hint: "Одно поле для всего — загрузка, очистка, дашборды, вопросы. Ассистент пишет скрипт; вы нажимаете «Загрузить данные».",
-    hintOffline: "Ollama не запущена, ассистент выключен. Всё остальное — редактор, загрузка данных, сохранение — работает.",
+    hintOffline: "Ассистент выключен: не удалось связаться с {where}. Всё остальное — редактор, загрузка данных, сохранение — работает.",
     reconnect: "Переподключиться",
     reconnecting: "Переподключение…",
     reconnected: "Связь восстановлена.",
@@ -729,7 +729,7 @@ const STRINGS = {
     couldNotStartChat: "Не удалось начать новый чат: {error}",
     couldNotDeleteChat: "Не удалось удалить чат: {error}",
     couldNotRenameChat: "Не удалось переименовать чат: {error}",
-    cloudModelConfirm: "Это облачная модель. Имена полей, примеры значений и результаты запросов будут отправлены на серверы Ollama, а не останутся на этой машине.\n\nПродолжить?",
+    cloudModelConfirm: "Это облачная модель. Имена полей, примеры значений и результаты запросов покинут эту машину.\n\nПродолжить?",
     qlikCacheNote: "Сохранено в файл приложения{stamp}. Qlik Sense Desktop не покажет новые листы в окне, где это приложение уже было открыто — закройте его в Qlik и откройте заново. Не нажимайте сначала «Сохранить» в Qlik: его старая копия перезапишет эту.",
   },
 
@@ -765,9 +765,9 @@ const STRINGS = {
     stopped: "To'xtatildi.",
     stoppedKept: "To'xtatildi. Allaqachon bajarilgan ishlar joyida qoldi.",
     askPlaceholder: "Xohlagan narsangizni so'rang: yuklamalar papkasidagi csv fayllarni yuklab birlashtiring / savdo bo'yicha dashbord tuzing / bozorlar bo'yicha jami savdo qancha?",
-    askPlaceholderOffline: "Assistent mavjud emas — Ollama'ni ishga tushiring va qaytadan yozing.",
+    askPlaceholderOffline: "Assistent mavjud emas — {where} bilan bog'lanib bo'lmadi. Aloqa tiklanganda qaytadan yozing.",
     hint: "Hammasi uchun bitta maydon — yuklash, tozalash, dashbordlar, savollar. Assistent skript yozadi; siz «Ma'lumotni yuklash» tugmasini bosasiz.",
-    hintOffline: "Ollama ishlamayapti, shuning uchun assistent o'chiq. Qolgani — muharrir, ma'lumot yuklash, saqlash — ishlayveradi.",
+    hintOffline: "Assistent o'chiq: {where} bilan bog'lanib bo'lmadi. Qolgani — muharrir, ma'lumot yuklash, saqlash — ishlayveradi.",
     reconnect: "Qayta ulanish",
     reconnecting: "Qayta ulanmoqda…",
     reconnected: "Aloqa tiklandi.",
@@ -817,7 +817,7 @@ const STRINGS = {
     couldNotStartChat: "Yangi suhbat boshlab bo'lmadi: {error}",
     couldNotDeleteChat: "Suhbatni o'chirib bo'lmadi: {error}",
     couldNotRenameChat: "Suhbat nomini o'zgartirib bo'lmadi: {error}",
-    cloudModelConfirm: "Bu bulutli model. Maydon nomlari, namuna qiymatlar va so'rov natijalari shu kompyuterda qolmasdan Ollama serverlariga yuboriladi.\n\nDavom etilsinmi?",
+    cloudModelConfirm: "Bu bulutli model. Maydon nomlari, namuna qiymatlar va so'rov natijalari shu kompyuterdan chiqib ketadi.\n\nDavom etilsinmi?",
     qlikCacheNote: "Ilova fayliga saqlandi{stamp}. Qlik Sense Desktop bu ilova ochiq turgan oynada yangi varaqlarni ko'rsatmaydi — ilovani Qlik'da yopib, qaytadan oching. Avval Qlik'da «Saqlash» tugmasini bosmang: uning eski nusxasi buni o'chirib yuboradi.",
   },
 };
@@ -1503,8 +1503,10 @@ async function load() {
   $("allowReload").checked = state.allow_reload !== false;
 
   const ready = state.assistant_ready !== false;
-  $("chatInput").placeholder = t(ready ? "askPlaceholder" : "askPlaceholderOffline");
-  $("chatHint").textContent = t(ready ? "hint" : "hintOffline");
+  const where = state.model_host || "the model";
+  $("chatInput").placeholder = ready
+    ? t("askPlaceholder") : t("askPlaceholderOffline", {where});
+  $("chatHint").textContent = ready ? t("hint") : t("hintOffline", {where});
   setScript(state.script);
   currentTab = currentTab || state.tabs[0] || null;
   renderTabs(state.tabs);

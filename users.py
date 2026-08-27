@@ -553,8 +553,15 @@ def unlock_name(username):
     return clear_failed_logins(username)
 
 
+def _session_token():
+    while True:
+        token = secrets.token_urlsafe(32)
+        if token[0].isalnum():
+            return token
+
+
 def start_session(user_id, ip="", agent=""):
-    token = secrets.token_urlsafe(32)
+    token = _session_token()
     now = _now()
     connect().execute(
         "INSERT INTO sessions (token, user_id, created, expires, last_seen, ip, agent) "

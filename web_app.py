@@ -37,7 +37,7 @@ from config import (
 )
 from data_prep import tab_names
 from mcp_server import mcp
-from ollama_client import OllamaError, describe_models
+from llm import ModelError, describe_models
 from qlik_engine import QlikEngineError
 
 log = logging.getLogger(__name__)
@@ -317,6 +317,7 @@ def get_state(sess=Depends(qlik_session), identity: Identity = Depends(require_u
         "allow_reload": sess.allow_reload(),
         "language": sess.language(),
         "assistant_ready": sess.assistant_ready(),
+        "model_host": llm.where(),
         "chat_id": sess.chat_id(),
         "transcript": transcript(sess.messages()),
         "user": identity.summary(),
@@ -337,12 +338,13 @@ def get_options(sess=Depends(qlik_session)):
 
     try:
         models = describe_models(sess.client())
-    except OllamaError as e:
+    except ModelError as e:
         log.debug("Could not list models: %s", e)
         models = [{
-            "name": sess.model() or "Ollama not running",
+            "name": sess.model() or f"{llm.where()} not reachable",
             "usable": sess.assistant_ready(),
-            "reason": "" if sess.assistant_ready() else "start Ollama, then reload this page",
+            "reason": "" if sess.assistant_ready()
+                      else f"could not reach {llm.where()}",
             "size_gb": 0,
         }]
 
@@ -364,7 +366,7 @@ def post_select(selection: Selection, sess=Depends(qlik_session),
     if selection.model and selection.model != sess.model():
         try:
             sess.set_model(selection.model)
-        except OllamaError as e:
+        except ModelError as e:
             raise HTTPException(400, str(e)) from e
 
     if selection.app and selection.app != sess.app_name():
@@ -426,7 +428,7 @@ def post_chat(body: ChatMessage, sess=Depends(qlik_session),
 
     try:
         model = sess.ensure_model()
-    except OllamaError as e:
+    except ModelError as e:
         raise HTTPException(503, str(e)) from e
 
     with sess.lock:
@@ -473,7 +475,7 @@ def post_chat_stream(body: ChatMessage, sess=Depends(qlik_session),
 
     try:
         model = sess.ensure_model()
-    except OllamaError as e:
+    except ModelError as e:
         raise HTTPException(503, str(e)) from e
 
     outbox = queue.Queue(maxsize=64)
@@ -985,7 +987,7 @@ def main(argv=None):
         model, note = session.resolve_model(args.model)
         if note:
             print(f"  note: {note}", flush=True)
-    except (OllamaError, QlikEngineError) as e:
+    except (ModelError, QlikEngineError) as e:
         print(f"  assistant unavailable: {e}", flush=True)
 
     print(f"\n  Qlik AI      -> http://{args.host}:{args.port}", flush=True)
@@ -994,7 +996,7 @@ def main(argv=None):
     print(
         f"  app {args.app!r} "
         f"({engine_.mode if engine_ else 'Qlik not reachable yet'}), "
-        f"model {model or 'none - start Ollama and just ask again'}",
+        f"model {model or f'none - {llm.where()} was not reachable'}",
         flush=True,
     )
     print(

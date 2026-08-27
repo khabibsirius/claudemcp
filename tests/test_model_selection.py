@@ -1,7 +1,7 @@
 import pytest
 
-from ollama_client import (
-    OllamaError,
+from llm import (
+    ModelError,
     model_capabilities,
     pick_tool_model,
     supports_tools,
@@ -100,17 +100,17 @@ class TestPickToolModel:
 
     def test_the_note_says_how_to_choose(self):
         _, note = pick_tool_model(FakeClient(), "phi4:14b")
-        assert "CHAT_MODEL" in note
+        assert "OPENAI_MODEL" in note
 
     def test_raises_when_nothing_installed_can_call_tools(self):
         client = FakeClient(capabilities={"phi4:14b": ["completion"]})
-        with pytest.raises(OllamaError, match="ollama pull"):
+        with pytest.raises(ModelError, match="OPENAI_MODEL"):
             pick_tool_model(client, "phi4:14b")
 
     def test_handles_an_empty_preference(self):
         assert pick_tool_model(FakeClient(), "")[0] == "gemma4:26b"
 
-    def test_unreachable_ollama_is_reported_clearly(self):
+    def test_an_unreachable_model_host_is_reported_without_naming_ollama(self):
         class Dead:
             def list(self):
                 raise ConnectionError("connection refused")
@@ -118,5 +118,11 @@ class TestPickToolModel:
             def show(self, model):
                 raise ConnectionError("connection refused")
 
-        with pytest.raises(OllamaError, match="ollama serve"):
+        with pytest.raises(ModelError) as raised:
             pick_tool_model(Dead(), "phi4:14b")
+
+        message = str(raised.value)
+        assert "connection refused" in message
+        assert "ollama" not in message.lower(), (
+            "this path serves both providers, so telling somebody running "
+            "Qwen to start Ollama sends them after the wrong thing")

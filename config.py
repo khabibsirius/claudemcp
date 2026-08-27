@@ -73,21 +73,17 @@ CLIENT_KEY = "client_key.pem"
 ROOT_CERT = "root.pem"
 
 
-OLLAMA_MODEL = _str_env("OLLAMA_MODEL", "phi4:14b")
-OLLAMA_HOST = _str_env("OLLAMA_HOST")
-OLLAMA_TIMEOUT = _float_env("OLLAMA_TIMEOUT", 600.0)
 
-OLLAMA_NUM_CTX = _int_env("OLLAMA_NUM_CTX", 32768)
+MODEL_NUM_CTX = _int_env("MODEL_NUM_CTX", 32768)
 
 CHAT_HISTORY_RESERVE = 19_500
 
 CHAT_HISTORY_CHARS = _int_env(
-    "CHAT_HISTORY_CHARS", max(24_000, (OLLAMA_NUM_CTX - CHAT_HISTORY_RESERVE) * 3)
+    "CHAT_HISTORY_CHARS", max(24_000, (MODEL_NUM_CTX - CHAT_HISTORY_RESERVE) * 3)
 )
 
 CHAT_MAX_STEPS = _int_env("CHAT_MAX_STEPS", 30)
 
-CHAT_MODEL = _str_env("CHAT_MODEL") or OLLAMA_MODEL
 
 
 HISTORY_DIR = _str_env(
@@ -100,11 +96,12 @@ HISTORY_MAX = _int_env("HISTORY_MAX", 200)
 GLOSSARY_FILE = _str_env("GLOSSARY_FILE", "glossary.md")
 
 
-LLM_PROVIDER = _str_env("LLM_PROVIDER", "ollama").lower()
 
 OPENAI_BASE_URL = _str_env("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_API_KEY = _str_env("OPENAI_API_KEY")
 OPENAI_MODEL = _str_env("OPENAI_MODEL", "gpt-4o-mini")
+
+CHAT_MODEL = _str_env("CHAT_MODEL") or OPENAI_MODEL
 OPENAI_ORGANISATION = _str_env("OPENAI_ORGANISATION")
 
 OPENAI_TIMEOUT = _float_env("OPENAI_TIMEOUT", 600.0)
@@ -245,19 +242,11 @@ def summary():
         f"timeouts          connect {QLIK_CONNECT_TIMEOUT}s / request {QLIK_REQUEST_TIMEOUT}s",
     ]
 
-    if LLM_PROVIDER == "ollama":
-        lines += [
-            f"model provider    ollama (local)",
-            f"ollama model      {OLLAMA_MODEL}",
-            f"ollama host       {OLLAMA_HOST or '(package default)'}",
-        ]
-    else:
-        lines += [
-            f"model provider    {LLM_PROVIDER} (OpenAI-compatible)",
-            f"model endpoint    {OPENAI_BASE_URL}",
-            f"model             {OPENAI_MODEL}",
-            f"api key           {'set' if OPENAI_API_KEY else '(not set)'}",
-        ]
+    lines += [
+        f"model endpoint    {OPENAI_BASE_URL}",
+        f"model             {OPENAI_MODEL}",
+        f"api key           {'set' if OPENAI_API_KEY else '(not set)'}",
+    ]
 
     lines += [
         f"sign-in           {'required' if AUTH_ENABLED else 'OFF - loopback only'}",

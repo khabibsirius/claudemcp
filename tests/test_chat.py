@@ -348,11 +348,21 @@ class TestScriptOverwriteConfirmation:
 
 class TestToolCallsSurviveSaving:
     def test_typed_tool_calls_are_stored_as_plain_dicts(self):
-        from ollama._types import Message
+        """A client that hands back objects rather than dicts.
 
-        typed = Message.ToolCall(
-            function=Message.ToolCall.Function(name="query", arguments={"limit": 5})
-        )
+        This used to import ollama's pydantic types. The dependency is gone,
+        but the normalising is still worth holding onto: a conversation is
+        written to disk as JSON, and an object in there is a turn that cannot
+        be reloaded.
+        """
+        class Function:
+            name = "query"
+            arguments = {"limit": 5}
+
+        class ToolCall:
+            function = Function()
+
+        typed = ToolCall()
         client = ScriptedClient([
             {"content": "", "tool_calls": [typed]},
             {"content": "done", "tool_calls": []},

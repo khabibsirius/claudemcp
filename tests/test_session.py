@@ -2,7 +2,7 @@ import pytest
 
 import mcp_server
 import session
-from ollama_client import OllamaError
+from llm import ModelError
 from qlik_engine import QlikEngineError, QlikNotConnectedError
 
 
@@ -192,7 +192,7 @@ class TestModel:
 
     def test_rejects_a_model_that_cannot_call_tools(self, clean):
         session._state["client"] = FakeOllama()
-        with pytest.raises(OllamaError, match="cannot call tools"):
+        with pytest.raises(ModelError, match="cannot call tools"):
             session.set_model("bad:1b")
         assert session.model() == "test"
 

@@ -181,6 +181,14 @@ class TestSessionsAndAudit:
         assert run("sessions", "--end", handle) == 0
         assert users.session_user(token)[0] is None
 
+    def test_a_handle_is_always_usable_as_a_command_line_argument(self):
+        """1.6% of URL-safe tokens start with a dash, and argparse reads that
+        as another flag - so `sessions --end -Ab3xY7z` failed with `expected
+        one argument` and the session could not be ended."""
+        handles = [users._session_token()[:8] for _ in range(2000)]
+        awkward = [h for h in handles if h.startswith(("-", "_"))]
+        assert awkward == [], f"{len(awkward)} handles argparse would refuse"
+
     def test_nobody_signed_in_says_so(self, boss, capsys):
         assert run("sessions") == 0
         assert "Nobody is signed in" in capsys.readouterr().out

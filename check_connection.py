@@ -9,12 +9,11 @@ from config import (
     APP_NAME,
     ENTERPRISE,
     LDAP_BIND_USER,
-    OLLAMA_MODEL,
     OPENAI_MODEL,
     QLIK_MODE,
 )
 from config import summary as config_summary
-from ollama_client import OllamaClient, OllamaError
+from llm import ModelError
 from qlik_engine import QlikEngine, QlikEngineError
 
 OK = "  ok   "
@@ -105,17 +104,9 @@ PROBE_TOOL = [{
 
 
 def check_model():
-    if llm.provider() == llm.OLLAMA:
-        try:
-            print(f"{OK} {OllamaClient(OLLAMA_MODEL).check()}")
-            return True
-        except OllamaError as e:
-            print(f"{FAIL} Ollama\n        {e}")
-            return False
-
     try:
         client = llm.build_client()
-    except OllamaError as e:
+    except ModelError as e:
         print(f"{FAIL} Model endpoint\n        {e}")
         return False
 
@@ -125,7 +116,7 @@ def check_model():
         if names and OPENAI_MODEL not in names:
             print(f"        note: {OPENAI_MODEL!r} is not in the list; "
                   f"first few are {', '.join(names[:5])}")
-    except OllamaError as e:
+    except ModelError as e:
         print(f"{FAIL} Model endpoint\n        {e}")
         return False
 
@@ -141,7 +132,7 @@ def _check_tool_calling(client):
             tools=PROBE_TOOL,
             options={"temperature": 0},
         )
-    except OllamaError as e:
+    except ModelError as e:
         print(f"{FAIL} Asking {OPENAI_MODEL!r} for a tool call\n        {e}")
         return False
 

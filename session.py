@@ -13,7 +13,7 @@ from config import (
     RECONNECT_COOLDOWN_SECONDS,
     USER_SESSION_IDLE_MINUTES,
 )
-from ollama_client import OllamaError, pick_tool_model
+from llm import ModelError, pick_tool_model
 from qlik_engine import QlikEngine, QlikEngineError, QlikNotConnectedError
 
 log = logging.getLogger(__name__)
@@ -308,10 +308,10 @@ class Session:
         return self.state["model"]
 
     def set_model(self, name):
-        from ollama_client import supports_tools
+        from llm import supports_tools
 
         if not supports_tools(self.client(), name):
-            raise OllamaError(f"{name} cannot call tools, so it can't run the assistant.")
+            raise ModelError(f"{name} cannot call tools, so it can't run the assistant.")
         with self._own_lock:
             self.state["model"] = name
         return name
@@ -321,7 +321,7 @@ class Session:
             self.client(),
             preferred or self.state["model"] or llm.default_model())
         if not chosen:
-            raise OllamaError("No usable model.")
+            raise ModelError("No usable model.")
         with self._own_lock:
             self.state["model"] = chosen
         return chosen, note

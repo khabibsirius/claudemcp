@@ -162,7 +162,7 @@ class TestSettingsAreSeparate:
     def test_choosing_a_model_does_not_change_anybody_else_s(self, two_people,
                                                              engines,
                                                              monkeypatch):
-        import ollama_client
+        import llm as ollama_client
 
         monkeypatch.setattr(ollama_client, "supports_tools", lambda c, n: True)
         alice, bob = two_people

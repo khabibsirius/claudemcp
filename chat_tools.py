@@ -10,7 +10,7 @@ from chart_specs import (
     fallback_types,
     resolve_chart_type,
 )
-from config import CHAT_HISTORY_CHARS, CHAT_MAX_STEPS, OLLAMA_NUM_CTX
+from config import CHAT_HISTORY_CHARS, CHAT_MAX_STEPS, MODEL_NUM_CTX
 from qlik_engine import QlikEngineError, QlikNotFoundError
 from dashboard_builder import build_sheet as _build_sheet
 from dashboard_builder import (
@@ -658,7 +658,7 @@ def _needs_model(name):
     return name == "build_dashboard"
 
 
-AGENT_OPTIONS = {"temperature": 0.2, "num_ctx": OLLAMA_NUM_CTX}
+AGENT_OPTIONS = {"temperature": 0.2, "num_ctx": MODEL_NUM_CTX}
 
 
 def _call_raw(call):

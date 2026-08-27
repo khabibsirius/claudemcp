@@ -79,8 +79,8 @@ See [Option B: Docker](#option-b-docker) below for what differs.
 
 ### Not needed
 
-Node.js, a C compiler, a database server, Redis, Ollama (unless you keep
-`LLM_PROVIDER=ollama` for testing). `tools/` contains Node scripts used once
+Node.js, a C compiler, a database server, Redis. The model runs on your own
+OpenAI-compatible endpoint, not on this box. `tools/` contains Node scripts used once
 to extract Qlik's chart property trees — they are not part of running this.
 
 ---
@@ -154,7 +154,6 @@ QLIK_SSL_VERIFY=true
 APP_NAME=<the app everyone starts in>
 
 # --- Model --------------------------------------------------------------
-LLM_PROVIDER=openai
 OPENAI_BASE_URL=https://your-endpoint/v1
 OPENAI_API_KEY=<key>
 OPENAI_MODEL=<model>

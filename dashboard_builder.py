@@ -8,9 +8,10 @@ from chart_specs import (
     resolve_chart_type,
     resolve_colour,
 )
-from config import APP_NAME, OLLAMA_MODEL
+from config import APP_NAME, CHAT_MODEL
 from insights import NO_MEASURE_TYPES
-from ollama_client import OllamaClient, OllamaError
+import llm
+from llm import ModelError
 from prompts import DASHBOARD_SYSTEM_PROMPT, build_dashboard_prompt
 from qlik_engine import QlikEngine, QlikEngineError, bare_field_name
 
@@ -293,8 +294,8 @@ def enrich_fields(engine, fields, max_cardinality=100, sample_size=5, limit=30):
     return fields
 
 
-def design_dashboard(fields, model=OLLAMA_MODEL, instruction=None, client=None):
-    client = client or OllamaClient(model)
+def design_dashboard(fields, model=CHAT_MODEL, instruction=None, client=None):
+    client = client or llm.build_client()
     prompt = build_dashboard_prompt(fields, instruction=instruction)
     spec = client.ask_json(prompt, system=DASHBOARD_SYSTEM_PROMPT)
 
@@ -392,7 +393,7 @@ def _partition(visualizations, field_names, field_info, seen=None, engine=None):
     return good, bad
 
 
-def design_full_dashboard(fields, model=OLLAMA_MODEL, instruction=None, client=None,
+def design_full_dashboard(fields, model=CHAT_MODEL, instruction=None, client=None,
                           retries=1, engine=None):
     field_names = {f["name"] for f in fields}
     field_info = {f["name"]: f for f in fields}
@@ -426,7 +427,7 @@ def design_full_dashboard(fields, model=OLLAMA_MODEL, instruction=None, client=N
 
         try:
             extra = design_dashboard(fields, model=model, instruction=top_up, client=client)
-        except (ValueError, OllamaError) as e:
+        except (ValueError, ModelError) as e:
             log.warning("Could not top up the dashboard: %s", e)
             break
 
@@ -470,7 +471,7 @@ def build_sheet(engine, title, charts, fields=None, description="Created by AI")
     }
 
 
-def run(app_name=APP_NAME, model=OLLAMA_MODEL, instruction=None):
+def run(app_name=APP_NAME, model=CHAT_MODEL, instruction=None):
     with QlikEngine() as engine:
         log.info("Opening app %r", app_name)
         engine.open_app(app_name)

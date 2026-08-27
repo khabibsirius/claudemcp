@@ -23,7 +23,6 @@ log = logging.getLogger(__name__)
 SERVER_DEPENDENCIES = [
     "mcp[cli]",
     "websocket-client",
-    "ollama",
     "python-dotenv",
 ]
 
@@ -209,7 +208,7 @@ def qlik_data_sources(connection: str = "", path: str = "") -> dict:
     description="""\
 Build a sheet of charts and save it. Two ways to call it:
 
-DESCRIBE IT - pass `instruction` in plain language and the local Ollama
+DESCRIBE IT - pass `instruction` in plain language and the configured
 model designs the charts by reading the data model itself, e.g.
 "sales by region and a trend over time, 4 charts". Nothing else needed.
 

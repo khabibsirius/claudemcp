@@ -57,7 +57,6 @@ class TestTheRequestThreadCeiling:
 class TestTheModelConnectionPool:
     @pytest.fixture(autouse=True)
     def hosted(self, monkeypatch):
-        monkeypatch.setattr(llm, "LLM_PROVIDER", "openai")
         monkeypatch.setattr(llm, "OPENAI_BASE_URL", "https://api.example.com/v1")
         llm.close_shared()
         yield
@@ -99,17 +98,6 @@ class TestTheModelConnectionPool:
         llm.close_shared()
         llm.close_shared()
         assert llm.build_client() is not None
-
-    def test_a_local_model_is_not_shared(self, monkeypatch):
-        monkeypatch.setattr(llm, "LLM_PROVIDER", "ollama")
-
-        class FakeOllama:
-            def __init__(self, host=None):
-                pass
-
-        monkeypatch.setitem(__import__("sys").modules, "ollama",
-                            type("m", (), {"Client": FakeOllama}))
-        assert llm.build_client() is not llm.build_client()
 
 
 class TestSessionsDoNotSerialiseOnEachOther:

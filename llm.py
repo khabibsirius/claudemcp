@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import threading
 
 import httpx
@@ -7,8 +8,6 @@ import httpx
 from config import (
     LLM_MAX_CONNECTIONS,
     LLM_MAX_KEEPALIVE,
-    LLM_PROVIDER,
-    OLLAMA_HOST,
     OPENAI_API_KEY,
     OPENAI_BASE_URL,
     OPENAI_EXTRA_BODY,
@@ -19,12 +18,17 @@ from config import (
     OPENAI_TIMEOUT,
     OPENAI_VERIFY_SSL,
 )
-from ollama_client import OllamaError
-
 log = logging.getLogger(__name__)
 
-OLLAMA = "ollama"
-OPENAI = "openai"
+
+class ModelError(Exception):
+    pass
+
+
+_FENCE = re.compile(r"\A\s*```(?:json)?\s*\n(?P<body>.*?)\n?\s*```\s*\Z", re.DOTALL)
+
+_CLOUD_HINTS = (":cloud", "-cloud")
+_TOO_SMALL_HINTS = (":0.5b", ":1b", ":1.5b", "-1b")
 
 THINK_OPEN = "<think>"
 THINK_CLOSE = "</think>"
@@ -88,6 +92,165 @@ class ThinkFilter:
         return tail
 
 
+def strip_code_fences(text):
+    text = (text or "").strip()
+    match = _FENCE.match(text)
+    return match.group("body").strip() if match else text
+
+
+def extract_json_object(text):
+    start = text.find("{")
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escaped = False
+
+    for index in range(start, len(text)):
+        char = text[index]
+
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+
+    return None
+
+
+def parse_json_reply(raw):
+    cleaned = strip_code_fences(raw)
+
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError as first_error:
+        candidate = extract_json_object(cleaned)
+        if candidate is None:
+            raise first_error
+        parsed = json.loads(candidate)
+
+    if not isinstance(parsed, dict):
+        raise ValueError(f"expected a JSON object, got {type(parsed).__name__}")
+
+    return parsed
+
+
+def _model_names(client):
+    try:
+        listing = client.list()
+    except Exception as e:
+        raise ModelError(f"Could not list the available models: {e}") from e
+
+    names = []
+    for entry in listing.get("models", []):
+        name = entry.get("model") or entry.get("name")
+        if name:
+            names.append(name)
+    return names
+
+
+def model_capabilities(client, model):
+    try:
+        info = client.show(model)
+    except Exception as e:
+        log.debug("Could not describe %s: %s", model, e)
+        return []
+    return list((info or {}).get("capabilities") or [])
+
+
+def supports_tools(client, model):
+    return "tools" in model_capabilities(client, model)
+
+
+def tool_capable_models(client):
+    def rank(name):
+        lowered = name.lower()
+        return (
+            any(h in lowered for h in _CLOUD_HINTS),
+            any(h in lowered for h in _TOO_SMALL_HINTS),
+            name,
+        )
+
+    return sorted(
+        (name for name in _model_names(client) if supports_tools(client, name)),
+        key=rank,
+    )
+
+
+def describe_models(client):
+    try:
+        listing = client.list()
+    except Exception as e:
+        raise ModelError(f"Could not list the available models: {e}") from e
+
+    models = []
+    for entry in listing.get("models", []):
+        name = entry.get("model") or entry.get("name")
+        if not name:
+            continue
+
+        lowered = name.lower()
+        cloud = any(hint in lowered for hint in _CLOUD_HINTS)
+        tiny = any(hint in lowered for hint in _TOO_SMALL_HINTS)
+        tools = supports_tools(client, name)
+
+        if not tools:
+            reason = "the endpoint does not offer this model"
+        elif tiny:
+            reason = "very small - tends to invent tool arguments"
+        else:
+            reason = ""
+
+        models.append({
+            "name": name,
+            "size_gb": round((entry.get("size") or 0) / 1e9, 1),
+            "tools": tools,
+            "cloud": cloud,
+            "usable": tools,
+            "recommended": tools and not tiny,
+            "reason": reason,
+        })
+
+    models.sort(key=lambda m: (not m["recommended"], not m["usable"], m["size_gb"]))
+    return models
+
+
+def pick_tool_model(client, preferred):
+    if preferred and supports_tools(client, preferred):
+        return preferred, ""
+
+    candidates = tool_capable_models(client)
+    if not candidates:
+        raise ModelError(
+            f"{preferred!r} is not a model this endpoint offers, and it offers "
+            "nothing else usable. Check OPENAI_MODEL against what the endpoint "
+            "lists at /v1/models."
+        )
+
+    chosen = candidates[0]
+    return chosen, (
+        f"{preferred!r} is not offered by this endpoint, so using {chosen!r} "
+        f"instead. Set OPENAI_MODEL in .env to choose. Also available: "
+        f"{', '.join(candidates[1:4]) or 'none'}"
+    )
+
+
+_UNKNOWN = object()
+
+
 class OpenAICompatibleClient:
     def __init__(self, base_url=None, api_key=None, timeout=None,
                  organisation=None, extra_headers=None, verify=None,
@@ -113,6 +276,9 @@ class OpenAICompatibleClient:
                 "is not being verified."
             )
 
+        self._models = _UNKNOWN
+        self._json_mode = True
+
         self._http = httpx.Client(
             headers=headers, verify=verify,
             timeout=httpx.Timeout(self.timeout, connect=self.connect_timeout),
@@ -124,6 +290,71 @@ class OpenAICompatibleClient:
 
     def close(self):
         self._http.close()
+
+    def available_models(self):
+        return _model_names(self)
+
+    def check(self):
+        names = self.available_models()
+        if self.default_model in names:
+            return (f"{self.base_url} is up, and offers "
+                    f"{self.default_model!r}.")
+        raise ModelError(
+            f"{self.base_url} is up but does not offer "
+            f"{self.default_model!r}. It offers: {', '.join(names) or '(none)'}. "
+            f"Set OPENAI_MODEL to one of those."
+        )
+
+    def ask(self, prompt, system=None, model=None):
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        reply = self.chat(model=model, messages=messages)
+        return strip_thinking(reply["message"]["content"])
+
+    def ask_json(self, prompt, system=None, retries=2, model=None):
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        last_error = None
+        last_raw = None
+
+        for attempt in range(retries + 1):
+            options = {"format": "json"} if self._json_mode else None
+            try:
+                reply = self.chat(model=model, messages=messages,
+                                  options=options)
+            except ModelError as e:
+                if not self._json_mode or "response_format" not in str(e):
+                    raise
+                log.info("%s does not take response_format; asking in prose "
+                         "instead", self.base_url)
+                self._json_mode = False
+                reply = self.chat(model=model, messages=messages)
+            raw = strip_thinking(reply["message"]["content"])
+            last_raw = raw
+
+            try:
+                return parse_json_reply(raw)
+            except (json.JSONDecodeError, ValueError) as e:
+                last_error = e
+                log.warning("Model reply was not usable JSON (attempt %d/%d): %s",
+                            attempt + 1, retries + 1, e)
+                messages.append({"role": "assistant", "content": raw})
+                messages.append({"role": "user", "content": (
+                    f"That reply could not be parsed as JSON: {e}. "
+                    "Reply again with the corrected JSON object only - no "
+                    "prose, no markdown fences."
+                )})
+
+        raise ModelError(
+            f"{model or self.default_model} did not return valid JSON after "
+            f"{retries + 1} attempts. Last error: {last_error}. "
+            f"Last reply: {last_raw!r}"
+        )
 
     @staticmethod
     def _to_openai_messages(messages):
@@ -203,6 +434,8 @@ class OpenAICompatibleClient:
             payload["max_tokens"] = options["num_predict"]
         if options.get("seed") is not None:
             payload["seed"] = options["seed"]
+        if options.get("format") == "json":
+            payload["response_format"] = {"type": "json_object"}
         return payload
 
     def chat(self, model=None, messages=None, tools=None, options=None,
@@ -245,14 +478,14 @@ class OpenAICompatibleClient:
             response = self._http.post(f"{self.base_url}/chat/completions",
                                        json=body)
         except httpx.HTTPError as e:
-            raise OllamaError(self._unreachable(e)) from e
+            raise ModelError(self._unreachable(e)) from e
 
         if response.status_code >= 400:
-            raise OllamaError(self._api_error(response))
+            raise ModelError(self._api_error(response))
         try:
             return response.json()
         except ValueError as e:
-            raise OllamaError(
+            raise ModelError(
                 f"{self.base_url} did not return JSON: {response.text[:200]}"
             ) from e
 
@@ -265,7 +498,7 @@ class OpenAICompatibleClient:
             ) as response:
                 if response.status_code >= 400:
                     response.read()
-                    raise OllamaError(self._api_error(response))
+                    raise ModelError(self._api_error(response))
 
                 for line in response.iter_lines():
                     if not line or not line.startswith("data:"):
@@ -301,7 +534,7 @@ class OpenAICompatibleClient:
                         if function.get("arguments"):
                             slot["arguments"] += function["arguments"]
         except httpx.HTTPError as e:
-            raise OllamaError(self._unreachable(e)) from e
+            raise ModelError(self._unreachable(e)) from e
 
         calls = [
             {"id": slot["id"],
@@ -323,7 +556,7 @@ class OpenAICompatibleClient:
         except (httpx.HTTPError, ValueError) as e:
             log.debug("Could not list models at %s: %s", self.base_url, e)
             if not self.default_model:
-                raise OllamaError(self._unreachable(e)) from e
+                raise ModelError(self._unreachable(e)) from e
             return {"models": [{"model": self.default_model, "size": 0}]}
 
         models = [
@@ -336,7 +569,21 @@ class OpenAICompatibleClient:
         return {"models": models}
 
     def show(self, model):
-        return {"capabilities": ["completion", "tools"]}
+        offered = self._offered()
+        known = model == self.default_model or not offered or model in offered
+        return {"capabilities": ["completion", "tools"] if known else []}
+
+    def _offered(self):
+        if self._models is _UNKNOWN:
+            try:
+                self._models = {
+                    entry["model"] for entry in self.list().get("models", [])
+                    if entry.get("model")
+                }
+            except Exception as e:
+                log.debug("Could not list the endpoint's models: %s", e)
+                self._models = None
+        return self._models
 
     def _unreachable(self, error):
         return (
@@ -366,13 +613,6 @@ class OpenAICompatibleClient:
         return f"The model endpoint returned {response.status_code}. {detail}"
 
 
-def provider():
-    name = (LLM_PROVIDER or OLLAMA).strip().lower()
-    if name in ("openai", "openai-compatible", "openrouter", "azure", "vllm"):
-        return OPENAI
-    return OLLAMA
-
-
 _shared_lock = threading.Lock()
 _shared_client = None
 
@@ -380,21 +620,15 @@ _shared_client = None
 def build_client():
     global _shared_client
 
-    if provider() == OPENAI:
-        if not OPENAI_BASE_URL:
-            raise OllamaError(
-                "LLM_PROVIDER is set to an OpenAI-compatible endpoint but "
-                "OPENAI_BASE_URL is empty. Set it to the API root, e.g. "
-                "https://api.openai.com/v1"
-            )
-        with _shared_lock:
-            if _shared_client is None:
-                _shared_client = OpenAICompatibleClient()
-            return _shared_client
-
-    import ollama
-
-    return ollama.Client(host=OLLAMA_HOST or None)
+    if not OPENAI_BASE_URL:
+        raise ModelError(
+            "OPENAI_BASE_URL is empty. Set it to the API root of your "
+            "endpoint, for example https://your-endpoint/v1"
+        )
+    with _shared_lock:
+        if _shared_client is None:
+            _shared_client = OpenAICompatibleClient()
+        return _shared_client
 
 
 def close_shared():
@@ -409,9 +643,9 @@ def close_shared():
             _shared_client = None
 
 
-def default_model():
-    if provider() == OPENAI:
-        return OPENAI_MODEL
-    from config import CHAT_MODEL
+def where():
+    return OPENAI_BASE_URL or "the model endpoint"
 
-    return CHAT_MODEL
+
+def default_model():
+    return OPENAI_MODEL

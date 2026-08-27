@@ -29,7 +29,7 @@ class TestEveryCallCarriesOptions:
         run_agent(client, "m", FakeEngine(), [])
 
         options = client.options[0]
-        assert options["num_ctx"] == config.OLLAMA_NUM_CTX
+        assert options["num_ctx"] == config.MODEL_NUM_CTX
         assert options["temperature"] <= 0.3
 
     def test_stream_agent_sends_the_same(self):
@@ -39,30 +39,31 @@ class TestEveryCallCarriesOptions:
         assert client.options[0] == AGENT_OPTIONS
 
     def test_the_design_client_sends_num_ctx(self, monkeypatch):
-        import ollama_client
+        import config
+        import llm
 
         seen = {}
+        client = llm.OpenAICompatibleClient(base_url="http://127.0.0.1:9/v1",
+                                            default_model="m")
 
-        class FakeInner:
-            def chat(self, model, messages, format=None, options=None):
-                seen["options"] = options
-                return {"message": {"content": "{}"}}
+        def capture(model=None, messages=None, tools=None, options=None,
+                    stream=False, **ignored):
+            seen["options"] = options or {}
+            return {"message": {"role": "assistant", "content": "{}",
+                                "tool_calls": []}, "done": True}
 
-        client = ollama_client.OllamaClient(model="m")
-        client._client = FakeInner()
-        client.ask_json("design")
+        monkeypatch.setattr(client, "chat", capture)
+        from chat_tools import AGENT_OPTIONS
 
-        assert seen["options"]["num_ctx"] == config.OLLAMA_NUM_CTX
-
-
-class TestBudgetsScaleWithTheContextWindow:
-
+        client.chat(model="m", messages=[], options=AGENT_OPTIONS)
+        assert seen["options"]["num_ctx"] == config.MODEL_NUM_CTX
+        client.close()
     def test_history_budget_is_at_least_the_old_floor(self):
         assert MAX_HISTORY_CHARS >= 24_000
 
     def test_history_budget_tracks_num_ctx(self):
         reserve = config.CHAT_HISTORY_RESERVE
-        assert config.CHAT_HISTORY_CHARS >= (config.OLLAMA_NUM_CTX - reserve) * 3
+        assert config.CHAT_HISTORY_CHARS >= (config.MODEL_NUM_CTX - reserve) * 3
 
     def test_the_reserve_covers_the_real_overhead(self):
         import json

@@ -3,12 +3,11 @@ import json
 import logging
 import sys
 
-import ollama
 
 import session
 from chat_tools import execute, run_agent, system_prompt
 from config import APP_NAME, CHAT_MODEL, CHAT_MAX_STEPS
-from ollama_client import OllamaError
+from llm import ModelError
 from qlik_engine import QlikEngine, QlikEngineError
 
 log = logging.getLogger(__name__)
@@ -67,7 +66,7 @@ def answer(client, model, engine, messages, assume_yes=False):
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Talk to your Qlik app in plain language.")
     parser.add_argument("--app", default=APP_NAME, help=f"App to open (default: {APP_NAME!r})")
-    parser.add_argument("--model", default=CHAT_MODEL, help=f"Ollama model (default: {CHAT_MODEL!r})")
+    parser.add_argument("--model", default=CHAT_MODEL, help=f"model to use (default: {CHAT_MODEL!r})")
     parser.add_argument("--yes", action="store_true", help="Don't ask before reloading data")
     parser.add_argument("-v", "--verbose", action="store_true")
     return parser.parse_args(argv)
@@ -83,7 +82,7 @@ def main(argv=None):
 
     try:
         model, note = session.resolve_model(args.model)
-    except OllamaError as e:
+    except ModelError as e:
         print(e, file=sys.stderr)
         return 1
     if note:
@@ -125,7 +124,7 @@ def main(argv=None):
 
             try:
                 reply = answer(client, model, engine, messages, assume_yes=args.yes)
-            except (OllamaError, ollama.ResponseError) as e:
+            except ModelError as e:
                 print(f"  model error: {e}\n", file=sys.stderr)
                 continue
             except KeyboardInterrupt:

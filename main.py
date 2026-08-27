@@ -2,9 +2,9 @@ import argparse
 import logging
 import sys
 
-from config import APP_NAME, OLLAMA_MODEL
+from config import APP_NAME, CHAT_MODEL
 from dashboard_builder import run
-from ollama_client import OllamaError
+from llm import ModelError
 from qlik_engine import QlikEngineError
 
 
@@ -15,8 +15,8 @@ def parse_args(argv=None):
         help=f"App to build in, by title, filename or id (default: {APP_NAME!r})",
     )
     parser.add_argument(
-        "--model", default=OLLAMA_MODEL,
-        help=f"Ollama model to design with (default: {OLLAMA_MODEL!r})",
+        "--model", default=CHAT_MODEL,
+        help=f"model to design with (default: {CHAT_MODEL!r})",
     )
     parser.add_argument(
         "--instruction", default=None,
@@ -42,7 +42,7 @@ def main(argv=None):
         spec, built, skipped = run(
             app_name=args.app, model=args.model, instruction=args.instruction
         )
-    except (QlikEngineError, OllamaError, ValueError) as e:
+    except (QlikEngineError, ModelError, ValueError) as e:
         print(f"\nFailed: {e}", file=sys.stderr)
         return 1
 

@@ -1,10 +1,11 @@
 import json
+from pathlib import Path
 
 import httpx
 import pytest
 
 import llm
-from ollama_client import OllamaError
+from llm import ModelError
 
 
 def fake_transport(handler):
@@ -257,17 +258,17 @@ class TestErrors:
 
     def test_a_bad_key_says_so(self, client):
         answer(client, {"error": {"message": "Incorrect API key"}}, status=401)
-        with pytest.raises(OllamaError, match="rejected the API key"):
+        with pytest.raises(ModelError, match="rejected the API key"):
             client.chat(model="m", messages=[])
 
     def test_an_unknown_model_names_the_setting_to_fix(self, client):
         answer(client, {"error": {"message": "no such model"}}, status=404)
-        with pytest.raises(OllamaError, match="OPENAI_MODEL"):
+        with pytest.raises(ModelError, match="OPENAI_MODEL"):
             client.chat(model="m", messages=[])
 
     def test_rate_limiting_is_distinguishable(self, client):
         answer(client, {"error": {"message": "slow down"}}, status=429)
-        with pytest.raises(OllamaError, match="rate limiting"):
+        with pytest.raises(ModelError, match="rate limiting"):
             client.chat(model="m", messages=[])
 
     def test_an_unreachable_endpoint_says_what_to_check(self, client):
@@ -275,19 +276,19 @@ class TestErrors:
             raise httpx.ConnectError("refused")
 
         client._http = fake_transport(handler)
-        with pytest.raises(OllamaError, match="OPENAI_BASE_URL"):
+        with pytest.raises(ModelError, match="OPENAI_BASE_URL"):
             client.chat(model="m", messages=[])
 
     def test_a_streaming_error_is_raised_not_swallowed(self, client):
         streamed(client, [], status=500)
-        with pytest.raises(OllamaError, match="returned 500"):
+        with pytest.raises(ModelError, match="returned 500"):
             list(client.chat(model="m", messages=[], stream=True))
 
 
 class TestListingModels:
 
     def test_models_are_reported_in_the_shape_the_picker_reads(self, client):
-        from ollama_client import describe_models
+        from llm import describe_models
 
         answer(client, {"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]})
         assert [m["name"] for m in describe_models(client)] == ["gpt-4o", "gpt-4o-mini"]
@@ -297,55 +298,39 @@ class TestListingModels:
         answer(client, {"error": "not found"}, status=404)
         assert client.list() == {"models": [{"model": "local-model", "size": 0}]}
 
-    def test_tool_support_is_assumed(self, client):
+    def test_tool_support_is_assumed_when_the_endpoint_lists_nothing(self, client):
+        """There is no OpenAI equivalent of Ollama's `show`, so with nothing to
+        go on the answer has to be yes."""
+        client._models = None
         assert "tools" in client.show("anything")["capabilities"]
 
+    def test_a_model_the_endpoint_does_not_list_is_not_assumed(self, client):
+        """This is what sent an Ollama model name to a Qwen gateway and got
+        back `403 key not allowed to access model`. Claiming every name works
+        means the wrong one is never caught here - it is caught by the
+        endpoint, mid-question, in front of the user."""
+        client._models = {"qwen-allowed"}
+        assert client.show("phi4:14b")["capabilities"] == []
+
     def test_the_picker_accepts_a_hosted_model(self, client):
-        from ollama_client import pick_tool_model
+        from llm import pick_tool_model
 
         answer(client, {"data": [{"id": "gpt-4o"}]})
         chosen, _ = pick_tool_model(client, "gpt-4o")
         assert chosen == "gpt-4o"
 
 
-class TestProviderSelection:
+class TestBuildingTheClient:
 
-    @pytest.mark.parametrize("configured,expected", [
-        ("ollama", llm.OLLAMA), ("", llm.OLLAMA), ("OLLAMA", llm.OLLAMA),
-        ("openai", llm.OPENAI), ("openrouter", llm.OPENAI),
-        ("azure", llm.OPENAI), ("vllm", llm.OPENAI),
-        ("openai-compatible", llm.OPENAI),
-    ])
-    def test_the_setting_picks_the_client(self, monkeypatch, configured, expected):
-        monkeypatch.setattr(llm, "LLM_PROVIDER", configured)
-        assert llm.provider() == expected
-
-    def test_an_unknown_provider_falls_back_to_local(self, monkeypatch):
-        monkeypatch.setattr(llm, "LLM_PROVIDER", "something-else")
-        assert llm.provider() == llm.OLLAMA
-
-    def test_openai_without_a_base_url_is_refused_with_a_reason(self, monkeypatch):
-        monkeypatch.setattr(llm, "LLM_PROVIDER", "openai")
+    def test_an_empty_base_url_is_refused_with_a_reason(self, monkeypatch):
+        monkeypatch.setattr(llm, "_shared_client", None)
         monkeypatch.setattr(llm, "OPENAI_BASE_URL", "")
-        with pytest.raises(OllamaError, match="OPENAI_BASE_URL"):
+        with pytest.raises(ModelError, match="OPENAI_BASE_URL"):
             llm.build_client()
 
-    def test_building_an_openai_client(self, monkeypatch):
-        monkeypatch.setattr(llm, "LLM_PROVIDER", "openai")
+    def test_building_the_client(self, monkeypatch):
         monkeypatch.setattr(llm, "OPENAI_BASE_URL", "https://api.example.com/v1")
         assert isinstance(llm.build_client(), llm.OpenAICompatibleClient)
-
-    def test_the_default_model_follows_the_provider(self, monkeypatch):
-        monkeypatch.setattr(llm, "LLM_PROVIDER", "openai")
-        monkeypatch.setattr(llm, "OPENAI_MODEL", "gpt-4o")
-        assert llm.default_model() == "gpt-4o"
-
-        monkeypatch.setattr(llm, "LLM_PROVIDER", "ollama")
-        from config import CHAT_MODEL
-        assert llm.default_model() == CHAT_MODEL
-
-
-class TestTheSessionUsesIt:
 
     def test_a_session_builds_whatever_the_setting_says(self, monkeypatch):
         import session
@@ -464,3 +449,90 @@ class TestEndpointSpecificBodyParameters:
 
         monkeypatch.delenv("_TEST_BODY", raising=False)
         assert config._json_env("_TEST_BODY") == {}
+
+class TestTheConfiguredModelIsTheOneThatGetsSent:
+
+    def chat_model_for(self, unused=None):
+        """A clean subprocess, because config reads the project's own .env on
+        import and this machine's happens to set CHAT_MODEL."""
+        import os
+        import subprocess
+        import sys
+        import tempfile
+
+        root = str(Path(__file__).resolve().parent.parent)
+        keep = ("PATH", "SYSTEMROOT", "TEMP", "TMP", "COMSPEC", "PATHEXT")
+        env = {k: v for k, v in os.environ.items() if k in keep}
+        env.update({
+            "OPENAI_MODEL": "qwen3.6-35b-a3b-fp8-dgx",
+        })
+        script = f"import sys; sys.path.insert(0, {root!r}); import config; print(config.CHAT_MODEL)"
+        done = subprocess.run([sys.executable, "-c", script], env=env,
+                              cwd=tempfile.gettempdir(), capture_output=True,
+                              text=True, timeout=120)
+        assert done.returncode == 0, done.stderr
+        return done.stdout.strip()
+
+    def test_chat_model_defaults_to_the_endpoint_s_model(self):
+        assert self.chat_model_for() == "qwen3.6-35b-a3b-fp8-dgx", (
+            "a model name other than OPENAI_MODEL reached the endpoint, which "
+            "answers 403 when the key is scoped to one model")
+
+    def test_a_model_the_endpoint_does_not_offer_is_not_vouched_for(self):
+        client = llm.OpenAICompatibleClient(
+            base_url="http://127.0.0.1:9/v1", default_model="qwen-allowed")
+        client._models = {"qwen-allowed"}
+        try:
+            assert client.show("qwen-allowed")["capabilities"] != []
+            assert client.show("phi4:14b")["capabilities"] == []
+        finally:
+            client.close()
+
+    def test_the_configured_model_is_trusted_even_if_it_is_not_listed(self):
+        """Some gateways serve a model without advertising it."""
+        client = llm.OpenAICompatibleClient(
+            base_url="http://127.0.0.1:9/v1", default_model="hidden-model")
+        client._models = {"something-else"}
+        try:
+            assert client.show("hidden-model")["capabilities"] != []
+        finally:
+            client.close()
+
+    def test_an_endpoint_that_lists_nothing_is_given_the_benefit_of_the_doubt(self):
+        client = llm.OpenAICompatibleClient(
+            base_url="http://127.0.0.1:9/v1", default_model="qwen-allowed")
+        client._models = None
+        try:
+            assert client.show("anything-at-all")["capabilities"] != []
+        finally:
+            client.close()
+
+    def test_the_endpoint_is_asked_for_its_models_only_once(self):
+        client = llm.OpenAICompatibleClient(
+            base_url="http://127.0.0.1:9/v1", default_model="qwen-allowed")
+        calls = []
+
+        def listing():
+            calls.append(1)
+            return {"models": [{"model": "qwen-allowed"}]}
+
+        client.list = listing
+        try:
+            for _ in range(5):
+                client.show("qwen-allowed")
+            assert len(calls) == 1
+        finally:
+            client.close()
+
+    def test_it_falls_through_to_a_model_the_endpoint_will_accept(self):
+        from llm import pick_tool_model
+
+        client = llm.OpenAICompatibleClient(
+            base_url="http://127.0.0.1:9/v1", default_model="qwen-allowed")
+        client.list = lambda: {"models": [{"model": "qwen-allowed"}]}
+        try:
+            chosen, note = pick_tool_model(client, "phi4:14b")
+            assert chosen == "qwen-allowed"
+            assert "phi4:14b" in note
+        finally:
+            client.close()
