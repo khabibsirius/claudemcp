@@ -13,8 +13,7 @@
   } catch (e) {}
 </script>
 <style>
-  /* Self-contained on purpose: no external fonts or scripts. Same palette as
-     the rest of the product. */
+
   :root {
     color-scheme: light;
     --green: #00934c; --green-dark: #007a3f; --green-soft: #e6f5ec;
@@ -217,7 +216,6 @@
 <div class="wrap">
   <div id="note"></div>
 
-  <!-- Users ---------------------------------------------------------- -->
   <section class="panel on" id="panel-users">
     <div class="bar">
       <h2>Users</h2>
@@ -235,7 +233,6 @@
     </table>
   </section>
 
-  <!-- Conversations --------------------------------------------------- -->
   <section class="panel" id="panel-chats">
     <div class="bar">
       <h2>Conversations</h2>
@@ -255,7 +252,6 @@
     </div>
   </section>
 
-  <!-- Sessions -------------------------------------------------------- -->
   <section class="panel" id="panel-sessions">
     <div class="bar">
       <h2>Signed in now</h2>
@@ -279,7 +275,6 @@
     </table>
   </section>
 
-  <!-- Audit ----------------------------------------------------------- -->
   <section class="panel" id="panel-audit">
     <div class="bar">
       <h2>Audit trail</h2>
@@ -298,7 +293,6 @@
 </div>
 </main>
 
-<!-- Create / edit a user ----------------------------------------------- -->
 <dialog id="userDialog">
   <form method="dialog" id="userForm">
     <div class="dlg-head">
@@ -342,9 +336,7 @@ const $ = id => document.getElementById(id);
 let USERS = [];
 let PER_USER_ENGINES = false;
 let ME = null;
-let editing = null;   // the user being edited, or null when creating
-
-// ---- plumbing --------------------------------------------------------------
+let editing = null;
 
 async function api(path, options) {
   const response = await fetch(path, options);
@@ -396,8 +388,6 @@ function tag(text, kind) {
   return span;
 }
 
-// ---- tabs ------------------------------------------------------------------
-
 const LOADERS = {
   users: loadUsers, chats: loadChats, sessions: loadSessions, audit: loadAudit,
 };
@@ -412,8 +402,6 @@ document.querySelectorAll("nav button").forEach(button => {
     LOADERS[button.dataset.panel]().catch(e => say(e.message));
   };
 });
-
-// ---- users -----------------------------------------------------------------
 
 async function loadUsers() {
   const data = await api("/api/admin/users");
@@ -507,7 +495,7 @@ function openUser(user) {
   editing = user || null;
   $("userDialogTitle").textContent = user ? "Edit " + user.username : "New user";
   $("fUsername").value = user ? user.username : "";
-  $("fUsername").disabled = !!user;   // the username is the identity
+  $("fUsername").disabled = !!user;
   $("fDisplay").value = user ? (user.display_name || "") : "";
   $("fRole").value = user ? user.role : "user";
   $("fActive").value = user ? (user.active ? "1" : "0") : "1";
@@ -517,9 +505,6 @@ function openUser(user) {
   $("passwordRow").style.display = user ? "none" : "grid";
   $("fPassword").required = !user;
 
-  // Everything Active Directory owns is refreshed from it on every sign-in,
-  // so editing it here would be overwritten by the next login. Shown, and
-  // not editable.
   const fromAD = !!(user && user.from_directory);
   for (const id of ["fDisplay", "fDirectory", "fUserId"]) {
     $(id).disabled = fromAD;
@@ -639,8 +624,6 @@ async function actAs(user) {
   } catch (e) { say(e.message); }
 }
 
-// ---- conversations ---------------------------------------------------------
-
 let openChat = null;
 
 async function loadChats() {
@@ -728,8 +711,7 @@ async function readChat(chat) {
       role.textContent = message.role === "user" ? chat.username : "assistant";
       const body = document.createElement("div");
       body.className = "body";
-      // textContent, not innerHTML: this is somebody else's typed input and
-      // an assistant's output, rendered on an administrator's page.
+
       body.textContent = message.content;
       wrap.append(role, body);
       reader.appendChild(wrap);
@@ -754,8 +736,6 @@ function fillPeople(select, people, chosen) {
   select.dataset.filled = "yes";
   select.value = chosen || "";
 }
-
-// ---- sessions --------------------------------------------------------------
 
 async function loadSessions() {
   const data = await api("/api/admin/sessions");
@@ -797,9 +777,7 @@ async function loadSessions() {
     engine.textContent = live
       ? (live.app || "no app open") + (live.impersonates ? " · as themselves" : " · shared")
       : "—";
-    // Which app somebody has open says nothing about whether the socket
-    // behind it still exists, and that is the thing worth seeing when
-    // something has gone wrong.
+
     if (live && live.app && !live.connected) {
       const note = document.createElement("div");
       note.style.fontSize = "11.5px";
@@ -826,9 +804,6 @@ async function loadSessions() {
 
 $("btnRefreshSessions").onclick = () => loadSessions().catch(e => say(e.message));
 
-// The button that replaces restarting the server. One session failing is
-// reported rather than thrown: an account whose Qlik identity is wrong must
-// not stop the other ninety-nine being repaired.
 $("btnReconnectAll").onclick = async () => {
   const button = $("btnReconnectAll");
   button.disabled = true;
@@ -851,8 +826,6 @@ $("btnReconnectAll").onclick = async () => {
     button.disabled = false;
   }
 };
-
-// ---- audit -----------------------------------------------------------------
 
 async function loadAudit() {
   const who = $("auditWho").value;
@@ -904,8 +877,6 @@ async function loadAudit() {
 $("btnRefreshAudit").onclick = () => loadAudit().catch(e => say(e.message));
 $("auditWho").onchange = () => loadAudit().catch(e => say(e.message));
 $("auditWhat").onchange = () => loadAudit().catch(e => say(e.message));
-
-// ---- session ---------------------------------------------------------------
 
 $("btnSignOut").onclick = async () => {
   try { await api("/api/logout", {method: "POST"}); } catch (e) {}

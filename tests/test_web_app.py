@@ -1,5 +1,3 @@
-"""The AI Data Load Editor's HTTP layer, against a fake Qlik engine."""
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -62,13 +60,6 @@ class FakeEngine:
 
 @pytest.fixture
 def engine(monkeypatch):
-    """Install a fake engine into the shared session everything now uses.
-
-    Changing app drops the session and opens a new one, because Qlik Sense
-    Desktop frees an app only when the socket holding it closes - so the
-    same fake is handed back rather than a real QlikEngine reaching for a
-    live Qlik.
-    """
     fake = FakeEngine()
 
     def new_session():
@@ -110,12 +101,6 @@ class TestState:
         assert client.get("/api/state").json()["connections"] == []
 
     def test_a_dropped_connection_is_rebuilt_rather_than_reported(self, client):
-        """A connection that went away is not the person's problem to solve.
-
-        This used to be a 503 that stayed a 503 - nothing retried, so one
-        dropped packet cost everyone the product until the server was
-        restarted. The app on record is re-opened instead.
-        """
         session._state["engine"] = None
 
         response = client.get("/api/state")
@@ -125,8 +110,6 @@ class TestState:
 
     def test_a_connection_that_cannot_be_rebuilt_says_so_and_offers_the_button(
             self, client, monkeypatch):
-        """When Qlik really is down, say which half is broken and mark the
-        answer as one the Reconnect button applies to."""
         from qlik_engine import QlikConnectionError
 
         def unreachable():
@@ -151,7 +134,6 @@ class TestScriptSaving:
         assert "TRACE x;" in engine.script
 
     def test_a_script_that_does_not_parse_is_rejected(self, client, engine):
-        """The engine rolls back; the editor must surface that, not claim success."""
         engine.rejected = "BROKEN"
         response = client.put("/api/script", json={"content": "BROKEN((("})
 
@@ -212,9 +194,6 @@ class TestChat:
 
 
 class TestSaveIsReported:
-    """Qlik Desktop shows a cached copy of an open app, so a created sheet
-    looks like it never happened. The file's timestamp proves otherwise."""
-
     def test_save_returns_the_file_stamp(self, client):
         result = client.post("/api/save").json()
         assert result["ok"] is True
@@ -249,9 +228,6 @@ class TestSaveIsReported:
 
 
 class TestLoadEditorToolPolicy:
-    """In the editor, loading data is a button the person presses - the same
-    arrangement as Qlik's own Data load editor."""
-
     def test_reload_is_withheld_from_the_assistant(self):
         assert "reload_data" not in LOAD_EDITOR_TOOLS
 
@@ -264,7 +240,6 @@ class TestLoadEditorToolPolicy:
         assert "not available" in result["error"]
 
     def test_execute_refuses_destructive_tools_with_no_confirm(self):
-        """No confirmation callback means no way to say yes, so it must not run."""
         engine = FakeEngine()
         result = execute(engine, "reload_data", {})
         assert result["cancelled"] is True
@@ -280,24 +255,12 @@ class TestLoadEditorToolPolicy:
         assert DESTRUCTIVE == {"reload_data", "delete_sheet"}
 
     def test_building_and_reading_are_never_gated(self):
-        """The gate exists for what cannot be undone. Gating a build would
-        make the assistant ask permission to do the thing it was asked for."""
         for name in ("query", "data_model", "list_charts", "build_dashboard",
                      "create_chart", "edit_chart", "analyze_sheet", "save"):
             assert name not in DESTRUCTIVE
 
 
 class TestWithheldIsNotMissing:
-    """A tool that is switched off must not be reported as non-existent.
-
-    Withholding delete_sheet from the browser did not read as caution: the
-    assistant answered "I don't have the function to delete sheets" and the
-    user went off to do it by hand. web_app.py's own comment predicted it -
-    a model that is simply refused concludes the action is impossible - and
-    the confirmation path had grown a `note` to prevent exactly that while
-    the withheld path still returned a bare error.
-    """
-
     def test_a_withheld_tool_explains_itself(self):
         from chat_tools import execute
 
@@ -307,9 +270,6 @@ class TestWithheldIsNotMissing:
         assert "not a missing capability" in result["note"]
 
     def test_an_invented_tool_gets_no_note(self):
-        """It really does not exist. Told it is merely switched off, a model
-        goes looking for the setting that turns it on and sends the user
-        after a capability nothing here has."""
         from chat_tools import execute
 
         result = execute(None, "teleport", {}, allowed={"query"})
@@ -318,15 +278,6 @@ class TestWithheldIsNotMissing:
 
 
 class TestDeletingSheetsFromTheBrowser:
-    """Withheld again, and the refusal has to stay honest.
-
-    It was allowed briefly. The engine side works, but a browser turn has no
-    confirmation step, so "delete all the sheets" is every sheet gone on a
-    small model's reading of one line. What must NOT come back is the
-    original failure: the assistant answering "I don't have the function to
-    delete sheets" and sending the user off to do it by hand.
-    """
-
     def test_delete_sheet_is_withheld_from_the_browser(self):
         from web_app import ASSISTANT_TOOLS
 
@@ -342,8 +293,6 @@ class TestDeletingSheetsFromTheBrowser:
         assert "not a missing capability" in result["note"]
 
     def test_the_quieter_destructive_actions_stay_gated(self):
-        """A reload and a script rewrite change what is underneath every
-        chart without changing what the person is looking at."""
         from web_app import _may_run
 
         _may_run = _may_run(session.system())

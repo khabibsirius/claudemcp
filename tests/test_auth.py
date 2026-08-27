@@ -1,14 +1,3 @@
-"""The gate in front of the product.
-
-Blocker B1 in readiness.md: there was no login, no token and no session
-identity anywhere in web_app.py, and `/mcp` was mounted with the same access
-and no separate check. Anyone who could reach the port could read the bank's
-figures, rewrite the load script and trigger a reload.
-
-These run against the real identify(), which the shared fixture otherwise
-stands in for.
-"""
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -68,7 +57,6 @@ class FakeEngine:
 
 @pytest.fixture
 def people():
-    """One administrator and one ordinary user, both able to sign in."""
     return {
         "boss": users.create("boss", "boss-password-1", role=users.ADMIN,
                              display_name="The Boss"),
@@ -79,7 +67,6 @@ def people():
 
 @pytest.fixture
 def client(people, monkeypatch):
-    """A browser with no cookie yet, and a fake Qlik behind the endpoints."""
     fake = FakeEngine()
     monkeypatch.setattr(session, "QlikEngine", lambda *a, **k: fake)
     monkeypatch.setattr(
@@ -91,10 +78,6 @@ def sign_in(client, username, password):
     return client.post("/api/login",
                        json={"username": username, "password": password})
 
-
-# ----------------------------------------------------------------------
-# The door
-# ----------------------------------------------------------------------
 
 class TestNothingIsReachableWithoutSigningIn:
 
@@ -119,8 +102,6 @@ class TestNothingIsReachableWithoutSigningIn:
         assert response.status_code == 401
 
     def test_the_mcp_endpoint_is_closed_too(self, client):
-        """The one that was mounted with no check at all, and that can
-        rewrite the load script and reload the data."""
         response = client.post("/mcp", json={"jsonrpc": "2.0", "method": "initialize",
                                              "id": 1, "params": {}})
         assert response.status_code == 401
@@ -138,16 +119,10 @@ class TestNothingIsReachableWithoutSigningIn:
         assert client.get("/healthz").status_code == 200
 
     def test_a_new_endpoint_is_closed_by_forgetting_rather_than_open(self):
-        """Deny by default. The public list is short and explicit, so adding
-        an endpoint protects it - the mistake to make is a 401, not a leak."""
         assert auth.is_public("/api/something-added-next-week") is False
         assert auth.is_public("/api/state") is False
         assert auth.is_public("/login") is True
 
-
-# ----------------------------------------------------------------------
-# Signing in
-# ----------------------------------------------------------------------
 
 class TestSigningIn:
 
@@ -156,27 +131,24 @@ class TestSigningIn:
         assert client.get("/api/state").status_code == 200
 
     def test_the_cookie_is_not_readable_from_script(self, client):
-        """It is the session. A page that can read it can send it on."""
         sign_in(client, "jsmith", "jsmith-password-1")
         header = client.cookies.jar._cookies
         raw = str(sign_in(client, "jsmith", "jsmith-password-1").headers)
         assert "httponly" in raw.lower()
         assert "samesite=lax" in raw.lower()
-        assert header  # the cookie really was set
+        assert header
 
     def test_the_wrong_password_is_refused(self, client):
         assert sign_in(client, "jsmith", "not-it").status_code == 401
         assert client.get("/api/state").status_code == 401
 
     def test_an_unknown_user_and_a_wrong_password_look_identical(self, client):
-        """Telling them apart hands an attacker a list of real usernames."""
         missing = sign_in(client, "nobody-at-all", "some-password")
         wrong = sign_in(client, "jsmith", "some-password")
         assert missing.status_code == wrong.status_code == 401
         assert missing.json()["detail"] == wrong.json()["detail"]
 
     def test_a_locked_account_says_so(self, client, monkeypatch):
-        """Otherwise the person retypes a correct password five more times."""
         monkeypatch.setattr(users, "LOGIN_MAX_ATTEMPTS", 2)
         sign_in(client, "jsmith", "wrong")
         sign_in(client, "jsmith", "wrong")
@@ -191,7 +163,6 @@ class TestSigningIn:
         assert client.get("/api/state").status_code == 401
 
     def test_a_disabled_account_stops_working_mid_session(self, client, people):
-        """Not at the end of a twelve-hour cookie."""
         sign_in(client, "jsmith", "jsmith-password-1")
         assert client.get("/api/state").status_code == 200
 
@@ -227,14 +198,7 @@ class TestChangingYourOwnPassword:
         assert client.post("/api/me/password", json={"password": "no"}).status_code == 400
 
 
-# ----------------------------------------------------------------------
-# MCP clients
-# ----------------------------------------------------------------------
-
 class TestApiTokens:
-    """Claude Code cannot be asked to hold a login cookie, and should not be
-    handed a password."""
-
     def test_a_token_gets_in(self, client, people):
         token = users.mint_token(people["jsmith"]["id"])
         response = client.get("/api/state", headers={"Authorization": f"Bearer {token}"})
@@ -266,8 +230,6 @@ class TestApiTokens:
                           headers={"Authorization": f"Bearer {token}"}).status_code == 401
 
     def test_a_token_does_not_let_you_act_as_someone_else(self, client, people):
-        """Acting as another user needs a real browser session, because it is
-        a state change on that session rather than a header."""
         token = users.mint_token(people["boss"]["id"])
         response = client.post("/api/admin/act-as",
                                headers={"Authorization": f"Bearer {token}"},
@@ -275,20 +237,7 @@ class TestApiTokens:
         assert response.status_code == 400
 
 
-# ----------------------------------------------------------------------
-# Roles
-# ----------------------------------------------------------------------
-
 class TestMcpIsAdministratorsOnly:
-    """Not a policy - a limitation, stated rather than papered over.
-
-    The MCP tool handlers run in tasks the session manager starts from the
-    lifespan task group, so the identity the gate established for a request
-    cannot reach them: every tool call lands in the shared system session no
-    matter who authenticated. Serving that to an ordinary user would answer
-    their questions from somebody else's open app.
-    """
-
     def test_an_ordinary_user_is_refused_with_a_reason(self, client, people):
         token = users.mint_token(people["jsmith"]["id"])
         response = client.post(
@@ -307,12 +256,6 @@ class TestMcpIsAdministratorsOnly:
 
 
 class TestTheMcpEndpointIsWhereTheDocumentationSays:
-    """The sub-application mounts its own route at "/mcp", so mounting THAT
-    at "/mcp" put the endpoint on "/mcp/mcp" - while the startup banner, the
-    README and every example config say "/mcp". A client pointed where the
-    documentation sends it got a 307 to a 404, which reads as the server
-    being broken rather than as an address being wrong."""
-
     def frames(self, response):
         return [line[6:] for line in response.text.splitlines()
                 if line.startswith("data: ")]
@@ -374,10 +317,6 @@ class TestAdministratorsOnly:
         assert client.get("/admin").status_code == 200
 
 
-# ----------------------------------------------------------------------
-# The single-operator escape hatch
-# ----------------------------------------------------------------------
-
 class TestAuthTurnedOff:
 
     def test_everything_is_open_and_the_operator_is_local(self, client, monkeypatch):
@@ -388,9 +327,6 @@ class TestAuthTurnedOff:
         assert me.json()["auth_enabled"] is False
 
     def test_it_refuses_to_serve_a_real_interface(self, monkeypatch, capsys):
-        """The failure this guards is somebody running --host 0.0.0.0 so a
-        colleague can try it, which puts the figures and the reload button on
-        the network with no login at all."""
         monkeypatch.setattr(web_app, "AUTH_ENABLED", False)
         assert web_app.main(["--host", "0.0.0.0"]) == 1
         assert "Refusing" in capsys.readouterr().err

@@ -1,5 +1,3 @@
-"""Engine protocol handling, against a fake websocket."""
-
 import pytest
 
 from qlik_engine import (
@@ -53,13 +51,10 @@ class TestSend:
         assert [r["id"] for r in engine.ws.sent] == [1, 2]
 
     def test_skips_unsolicited_notifications(self, engine):
-        """The engine interleaves OnConnected and change events with replies."""
         engine.ws = FakeEngineSocket(handlers={"Noop": {"ok": True}}, noisy=True)
         assert engine.send("Noop")["result"] == {"ok": True}
 
     def test_skips_a_straggler_from_an_earlier_call(self, engine):
-        """A reply to a call that already timed out must not be mistaken for
-        the answer to this one."""
         engine.ws.handlers = {"Noop": {"ok": True}}
         engine.ws.push_unsolicited({"jsonrpc": "2.0", "id": 999, "result": {"stale": True}})
         assert engine.send("Noop")["result"] == {"ok": True}
@@ -74,9 +69,6 @@ class TestSend:
             offline_engine.send("GetAllInfos")
 
     def test_a_reset_socket_raises_a_connection_error(self, engine):
-        """A raw ConnectionResetError from the OS used to escape untyped -
-        the send path caught only WebSocketException, so callers handling
-        QlikConnectionError never saw the dropped socket."""
         def dies(request):
             raise ConnectionResetError("peer reset")
 
@@ -87,11 +79,6 @@ class TestSend:
 
 
 class TestSessionObjects:
-    """Regression: DestroySessionObject takes the object's generic id, not
-    its handle. Passing the handle failed every time, and the failure was
-    swallowed, so session objects accumulated for the life of the connection.
-    """
-
     def test_destroys_using_the_generic_id(self, engine):
         engine.ws.handlers = {
             "CreateSessionObject": {"qReturn": {"qHandle": 7, "qGenericId": "OBJ_1"}},
@@ -162,25 +149,22 @@ class TestListSheets:
         assert sheets[0] == {
             "qId": "SH_abc", "title": "Sales", "description": "d", "chart_count": 2,
         }
-        assert sheets[1]["chart_count"] == 0  # cells: null
+        assert sheets[1]["chart_count"] == 0
 
 
 class TestAppResolution:
-    """Desktop opens apps by name; Enterprise needs the GUID. Resolving the
-    name to an id up front is what lets one APP_NAME work in both."""
-
     APPS = [
         {"id": "c:/apps/Sales.qvf", "name": "Sales Dashboard", "path": "Sales.qvf"},
         {"id": "9f3c-guid", "name": "Finance", "path": "Finance"},
     ]
 
     @pytest.mark.parametrize("given,expected", [
-        ("Sales Dashboard", "c:/apps/Sales.qvf"),   # exact title
-        ("Sales.qvf", "c:/apps/Sales.qvf"),         # filename
-        ("Sales", "c:/apps/Sales.qvf"),             # filename without .qvf
-        ("sales dashboard", "c:/apps/Sales.qvf"),   # case-insensitive
-        ("c:/apps/Sales.qvf", "c:/apps/Sales.qvf"), # already an id
-        ("9f3c-guid", "9f3c-guid"),                 # enterprise guid
+        ("Sales Dashboard", "c:/apps/Sales.qvf"),
+        ("Sales.qvf", "c:/apps/Sales.qvf"),
+        ("Sales", "c:/apps/Sales.qvf"),
+        ("sales dashboard", "c:/apps/Sales.qvf"),
+        ("c:/apps/Sales.qvf", "c:/apps/Sales.qvf"),
+        ("9f3c-guid", "9f3c-guid"),
         ("Finance", "9f3c-guid"),
     ])
     def test_resolves_names_to_ids(self, offline_engine, given, expected):
@@ -214,9 +198,6 @@ class TestAppResolution:
         assert engine.ws.requests_for("OpenDoc")[0]["params"] == ["data"]
 
     def test_already_open_says_what_to_do(self, engine):
-        """Error 1002 is "A document is already open" - ANY document. Qlik
-        Sense Desktop keeps one app open per engine, so naming the app being
-        asked for sent people hunting for a window that was never open."""
         engine.ws.handlers = {
             "GetDocList": {"qDocList": [{"qDocId": "1", "qTitle": "data1"}]},
             "OpenDoc": {"error": {"message": "App already open"}},
@@ -279,7 +260,6 @@ class TestCreateChart:
         assert hypercube["qMeasures"][0]["qDef"]["qDef"] == "=Sum([Sales])"
 
     def test_measures_sort_before_dimensions(self, sheet_engine):
-        """Without this the chart renders blank even with valid data."""
         sheet_engine.create_chart(
             "barchart", "t", dimension="Region", measure_expression="Sum([Sales])"
         )
@@ -311,7 +291,7 @@ class TestCreateChart:
         cells = sheet_engine.ws.requests_for("SetProperties")[0]["params"][0]["cells"]
         assert len(cells) == 1
         assert cells[0]["type"] == "kpi"
-        assert cells[0]["colspan"] == 6  # the kpi default from chart_specs
+        assert cells[0]["colspan"] == 6
         assert "bounds" in cells[0]
 
     def test_rejects_an_unknown_chart_type(self, sheet_engine):
@@ -319,9 +299,6 @@ class TestCreateChart:
             sheet_engine.create_chart("definitely-not-a-chart", "t", measure="Sales")
 
     def test_scatter_now_resolves_and_asks_for_what_it_needs(self, sheet_engine):
-        """"scatter" used to be an unknown type. It is a real one now, and it
-        needs two measures - which is why every attempt at one silently
-        produced something else."""
         with pytest.raises(QlikEngineError, match="at least 2 measure"):
             sheet_engine.create_chart(
                 "scatter", "t", dimension="Region", measure_expression="Sum([Sales])"
@@ -350,9 +327,6 @@ class TestLifecycle:
         assert engine.sheet_handle is None
 
     def test_close_clears_app_identity_and_grid_state(self, engine):
-        """A reconnect after close() used to run against the previous
-        session's app id and a grid cursor half way down a sheet that was no
-        longer open."""
         engine.app_id = "c:/apps/x.qvf"
         engine.sheet_id = "SH_1"
         engine._next_row = 8
@@ -365,9 +339,6 @@ class TestLifecycle:
         assert (engine._next_col, engine._next_row) == (0, 0)
 
     def test_close_clears_identity_even_when_the_socket_is_already_gone(self, engine):
-        """_await_response nulls `ws` when the engine drops the connection
-        but leaves the handles - close() must still clear them or the next
-        connect inherits a dead session's identity."""
         engine.ws = None
         engine.close()
         assert engine.app_handle is None
@@ -411,20 +382,10 @@ class TestLifecycle:
 
 
 class TestReloadFallback:
-    """DoReloadEx falls back to DoReload only when the METHOD is the problem.
-
-    QlikConnectionError subclasses QlikEngineError, so a DoReloadEx that
-    merely timed out used to trigger the fallback too - starting a second
-    full reload while the first was often still running server-side.
-    """
-
     def test_a_connection_error_does_not_start_a_second_reload(self, engine):
         def dies(request):
             raise ConnectionResetError("peer reset")
 
-        # Held onto deliberately: a socket the network has taken away is now
-        # discarded, so `engine.ws` is None by the time this is checked. That
-        # is the behaviour the recovery depends on - see _drop_socket.
         socket = engine.ws
         socket.handlers = {"DoReloadEx": dies, "DoReload": {"qReturn": True}}
 
@@ -447,13 +408,6 @@ class TestReloadFallback:
 
 
 class TestScriptSyntaxReport:
-    """qErrLen is the LENGTH of the offending text, not an error code.
-
-    Reporting it under the key "code" put a meaningless number in every
-    set_script failure and sent people hunting for Qlik error codes that do
-    not exist.
-    """
-
     def test_reports_length_not_a_fake_error_code(self, engine):
         engine.ws.handlers = {"CheckScriptSyntax": {"qErrors": [
             {"qLineInTab": 3, "qTabIx": 0, "qColInLine": 7, "qErrLen": 5},
@@ -465,10 +419,6 @@ class TestScriptSyntaxReport:
 
 
 class TestSetScriptRollbackFailure:
-    """The rollback after a failed syntax check can itself fail. When it
-    did, the rollback's error replaced the syntax report - the one thing
-    telling the caller what to fix in the script."""
-
     def test_the_syntax_report_survives_a_failed_rollback(self, engine):
         def set_script(request):
             if request["params"] == ["GOOD"]:
@@ -490,11 +440,6 @@ class TestSetScriptRollbackFailure:
 
 
 class TestClientAuthoredCells:
-    """A sheet built by hand in the Qlik client stores real fractional
-    bounds and no integer col/row fields. Recomputing every cell from the
-    0/0/1/1 defaults collapsed such a layout - everything minimised and
-    stacked at the origin - the moment a chart was added here."""
-
     def test_bounds_without_grid_fields_are_preserved(self, offline_engine):
         authored = {
             "name": "hand", "type": "barchart",
@@ -513,9 +458,6 @@ class TestClientAuthoredCells:
 
 
 class TestUpdateChartColour:
-    """An unknown colour name used to resolve to None and be dropped, so
-    the caller was told "Nothing to change" instead of what was wrong."""
-
     def test_an_unknown_colour_is_an_error_not_a_no_op(self, engine):
         engine.ws.handlers = {
             "GetObject": {"qReturn": {"qHandle": 9}},
@@ -530,10 +472,6 @@ class TestUpdateChartColour:
 
 
 class TestDeletingASheet:
-    """Nothing could remove a sheet before this existed. A session that built
-    twenty sheets by mistake had no way to undo any of it - and the model,
-    asked to tidy them up, reported that it had."""
-
     SHEETS = {"qLayout": {"qAppObjectList": {"qItems": [
         {"qInfo": {"qId": "SH_aaa"},
          "qData": {"title": "Executive Overview", "cells": [{}, {}]}},
@@ -579,7 +517,6 @@ class TestDeletingASheet:
         assert engine.ws.requests_for("DestroyObject") == []
 
     def test_two_sheets_of_the_same_name_are_refused(self, engine):
-        """Guessing which one costs a sheet, not a misplaced chart."""
         engine.ws.handlers = {
             "CreateSessionObject": {"qReturn": {"qHandle": 9, "qGenericId": "L1"}},
             "GetLayout": {"qLayout": {"qAppObjectList": {"qItems": [
@@ -596,7 +533,6 @@ class TestDeletingASheet:
         assert engine.ws.requests_for("DestroyObject") == []
 
     def test_deleting_the_open_sheet_clears_it_as_the_target(self, engine):
-        """New charts would otherwise be built onto a sheet that is gone."""
         self.sheets(engine)
         engine.sheet_id = "SH_aaa"
         engine.sheet_handle = 5

@@ -1,43 +1,3 @@
-<#
-.SYNOPSIS
-    Install Qlik AI as a Windows service.
-
-.DESCRIPTION
-    Wraps `python web_app.py` in a service using NSSM, so it starts with the
-    machine and comes back after a crash without anybody being logged in.
-
-    Why a wrapper at all: Python is not a service host. Without one the
-    server runs only while somebody is signed in with a console open, and
-    ends the moment they log off - which is exactly what happens the first
-    time the box is patched at 2am.
-
-    Run from an elevated PowerShell prompt.
-
-.PARAMETER ServiceName
-    What the service is called. Defaults to QlikAI.
-
-.PARAMETER ProjectDir
-    Where the checkout lives. Defaults to this script's parent directory.
-
-.PARAMETER Port
-    Port to listen on. Defaults to 8000.
-
-.PARAMETER ListenHost
-    Address to bind. Defaults to 127.0.0.1, which is loopback only.
-    Use 0.0.0.0 to serve the network - and put TLS in front of it first.
-
-.PARAMETER Account
-    The Windows account the service runs as. Defaults to LocalSystem.
-    Prefer a dedicated low-privilege account that can read the Qlik
-    certificates and write the data directory, and nothing else.
-
-.EXAMPLE
-    .\install-service.ps1 -ListenHost 0.0.0.0 -Port 8000
-
-.EXAMPLE
-    .\install-service.ps1 -Account "DOMAIN\svc_qlikai" -Password (Read-Host -AsSecureString)
-#>
-
 [CmdletBinding()]
 param(
     [string]   $ServiceName = "QlikAI",
@@ -101,9 +61,6 @@ if (-not (Test-Path $entry)) {
 $nssm = Find-Nssm
 Write-Host "Using NSSM at $nssm"
 
-# The data directory holds the account database and every saved
-# conversation. It is the thing to back up, and the only thing here that
-# cannot be recreated from the checkout.
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 New-Item -ItemType Directory -Force -Path $LogDir  | Out-Null
 
@@ -126,23 +83,15 @@ if ($existing) {
 & $nssm set $ServiceName Description       "AI assistant for Qlik Sense: load editor, dashboards and chat."
 & $nssm set $ServiceName Start             SERVICE_AUTO_START
 
-# The app writes its own rotating log via LOG_FILE. These catch anything
-# that escapes before logging is configured - an import error, a bad .env -
-# which is exactly when you most need to see something.
 & $nssm set $ServiceName AppStdout         (Join-Path $LogDir "service-out.log")
 & $nssm set $ServiceName AppStderr         (Join-Path $LogDir "service-err.log")
 & $nssm set $ServiceName AppRotateFiles    1
 & $nssm set $ServiceName AppRotateBytes    10485760
 
-# Restart on failure, but back off. A service that crashes on a bad
-# configuration and restarts instantly forever writes gigabytes of identical
-# stack traces and hides the one at the top.
 & $nssm set $ServiceName AppExit Default   Restart
 & $nssm set $ServiceName AppRestartDelay   10000
 & $nssm set $ServiceName AppThrottle       10000
 
-# Give it time to close Qlik sessions and save open conversations rather
-# than being killed mid-write.
 & $nssm set $ServiceName AppStopMethodSkip 0
 & $nssm set $ServiceName AppStopMethodConsole 15000
 

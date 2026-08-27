@@ -5,9 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Qlik AI — Data Load Editor</title>
 <script>
-  // Resolve the theme before the first paint, or the page flashes the wrong
-  // one on every load. The rest of the theme handling is in the main script;
-  // this only has to run early.
+
   try {
     var saved = localStorage.getItem("qlikai-theme") || "system";
     document.documentElement.dataset.theme =
@@ -16,12 +14,7 @@
   } catch (e) {}
 </script>
 <style>
-  /* Self-contained on purpose: no external fonts or scripts - this has to
-     work with no internet. System fonts only. */
-  /* Light is the base; the dark palette below is applied by data-theme,
-     which the head script sets from the saved choice or the OS. Driving it
-     from an attribute rather than a media query is what lets someone pick a
-     theme that isn't the one their machine is set to. */
+
   :root {
     color-scheme: light;
     --green: #00934c; --green-dark: #007a3f; --green-soft: #e6f5ec;
@@ -56,7 +49,6 @@
   }
   ::selection { background: var(--accent); color: #fff; }
 
-  /* Subtle scrollbars that match both themes. */
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-thumb {
     background: var(--line); border-radius: 8px;
@@ -65,9 +57,6 @@
   ::-webkit-scrollbar-thumb:hover { background-color: var(--faint); }
   ::-webkit-scrollbar-track { background: transparent; }
 
-  /* ------------------------------------------------------------------ */
-  /* Top bar                                                             */
-  /* ------------------------------------------------------------------ */
   header {
     display: flex; align-items: center; gap: 14px;
     padding: 10px 16px; background: var(--surface);
@@ -90,8 +79,6 @@
   }
   header .spacer { flex: 1; }
 
-  /* Who is signed in, and the way out. Kept to the right of the primary
-     actions so it never competes with Save and Load data. */
   .account { display: flex; align-items: center; gap: 8px; padding-left: 12px;
              margin-left: 4px; border-left: 1px solid var(--line); }
   .account .who {
@@ -110,9 +97,6 @@
   }
   .acting[hidden] { display: none; }
 
-  /* Shown when the connection to Qlik has gone. Shares the acting bar's
-     shape on purpose - it is the same kind of thing: a state the page is in
-     that the person has to know about, with the one action that ends it. */
   .offline {
     display: flex; align-items: center; gap: 12px;
     padding: 8px 16px; font-size: 12.5px;
@@ -142,7 +126,6 @@
   .pick select:focus { border-color: var(--accent); }
   .pick select option:disabled { color: var(--bad); }
 
-  /* The reload permission, as a switch rather than a bare checkbox. */
   .switch { display: flex; align-items: center; gap: 8px; cursor: pointer;
             font-size: 12.5px; color: var(--muted); user-select: none; }
   .switch input { position: absolute; opacity: 0; pointer-events: none; }
@@ -160,8 +143,6 @@
   .switch input:checked + .track::after { transform: translateX(14px); }
   .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-  /* Theme picker. Three states rather than two, because "follow the machine"
-     is a real preference and losing it to a plain toggle is a downgrade. */
   .theme {
     display: flex; gap: 2px; padding: 2px; flex: none;
     background: var(--chip); border: 1px solid var(--line); border-radius: 999px;
@@ -190,16 +171,10 @@
   button.primary:hover:not(:disabled) { background: var(--green-dark); border-color: var(--green-dark); }
   button:disabled { opacity: .55; cursor: not-allowed; }
 
-  /* Send doubles as Stop while a turn streams. Red because it is the same
-     button in the same place as the green Send, so colour is the only thing
-     telling them apart at a glance. --bad already carries its own
-     dark-theme value, and brightness() darkens the hover in both themes
-     without a second variable to keep in step with it. */
   button.primary.stopping,
   button.primary.stopping:hover { background: var(--bad); border-color: var(--bad); }
   button.primary.stopping:hover { filter: brightness(.92); }
 
-  /* Busy state for Load data: a small conic spinner replaces intent. */
   button .spin {
     display: none; width: 12px; height: 12px; margin-right: 7px;
     border: 2px solid rgba(255,255,255,.35); border-top-color: #fff;
@@ -209,9 +184,6 @@
   button.busy .spin { display: inline-block; }
   @keyframes rotate { to { transform: rotate(360deg); } }
 
-  /* ------------------------------------------------------------------ */
-  /* Main three-pane layout                                              */
-  /* ------------------------------------------------------------------ */
   main { flex: 1; display: flex; min-height: 0; gap: 0; }
   .col { display: flex; flex-direction: column; min-height: 0; }
   .sections { width: var(--sections-w, 200px); background: var(--surface);
@@ -220,9 +192,6 @@
                  border-left: 1px solid var(--line); overflow: hidden; flex: none; }
   .editor { flex: 1; min-width: 0; background: var(--code-bg); }
 
-  /* Draggable dividers. Every boundary in the layout can be taken hold of:
-     the side panels collapse when dragged closed, and double-click puts a
-     divider back where it started. */
   .divider-v { flex: none; width: 6px; margin: 0 -3px; cursor: col-resize;
                z-index: 4; transition: background .15s; }
   .divider-v:hover, .divider-v.dragging {
@@ -259,11 +228,6 @@
   .list .sub { display: block; color: var(--faint); font-size: 11px; }
   .list .empty { color: var(--faint); font-size: 12.5px; padding: 10px; cursor: default; }
 
-  /* ------------------------------------------------------------------ */
-  /* Code editor                                                         */
-  /* ------------------------------------------------------------------ */
-  /* Gutter and textarea share one font and line-height, or the numbers
-     drift out of step with the code they label. */
   .code { flex: 1; display: flex; min-height: 0; background: var(--code-bg); }
   .gutter, textarea#script {
     font: 13.5px/1.65 "Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace;
@@ -291,11 +255,6 @@
   .editor-status.bad { color: var(--bad); background: var(--bad-soft); }
   .editor-status.good { color: var(--green-dark); background: var(--green-soft); }
 
-  /* ------------------------------------------------------------------ */
-  /* Assistant dock                                                      */
-  /* ------------------------------------------------------------------ */
-  /* Smaller than the editor by default and draggable, since the script is
-     the thing you read and the conversation is the thing you glance at. */
   .chat {
     position: relative;
     height: var(--chat-h, 50vh); min-height: 110px; max-height: 94vh;
@@ -305,8 +264,6 @@
     box-shadow: 0 -1px 3px rgba(16, 24, 40, .05);
   }
 
-  /* The saved-chat rail sits beside the conversation, inside the resizable
-     strip, so dragging the chat taller gives both of them the room. */
   .chatbody { flex: 1; display: flex; min-height: 0; }
   .convo { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
@@ -328,8 +285,6 @@
     color: var(--faint); font-size: 12px; padding: 10px 8px; line-height: 1.45;
   }
 
-  /* Row is the hit target; the delete button rides on top of it, so the two
-     cannot be nested buttons. */
   .chat-item { position: relative; display: flex; }
   .chat-item .open {
     flex: 1; min-width: 0; text-align: left; border: 1px solid transparent;
@@ -358,10 +313,6 @@
   .chat-item .del:hover { color: var(--bad); background: var(--bad-soft); }
   .chat-item .rename:hover { color: var(--ink); background: var(--chip); }
 
-  /* Before the first message the input is the main event, not a strip at
-     the bottom of the screen: welcome, suggestions and the box sit together
-     in the middle. The first question docks everything back down so the
-     conversation has the room. */
   .chat.empty .convo { justify-content: center; }
   .chat.empty .log { flex: 0 0 auto; overflow: visible; padding-bottom: 0; }
   .chat.empty .log .msg { max-width: 760px; }
@@ -384,8 +335,6 @@
   .msg.you .who::before { background: var(--accent); }
   .msg.you .who { color: var(--accent); }
 
-  /* Copy, on every message. Hidden until the message is hovered so the log
-     stays quiet, but always reachable by keyboard. */
   .msg .copy {
     margin-left: auto; font: 11px "Segoe UI", system-ui, sans-serif;
     text-transform: none; letter-spacing: 0; font-weight: 600;
@@ -407,8 +356,6 @@
     border: 1px dashed var(--line);
   }
 
-  /* Rendered markdown. Plain bubbles keep pre-wrap for their newlines; here
-     the block tags carry the spacing, so pre-wrap would double every gap. */
   .msg .body.md { white-space: normal; }
   .msg .body.md > :first-child { margin-top: 0; }
   .msg .body.md > :last-child { margin-bottom: 0; }
@@ -452,7 +399,7 @@
     font: 10.5px/1 "Cascadia Code", Consolas, monospace;
     letter-spacing: .05em; text-transform: uppercase; color: var(--faint);
   }
-  /* A wide table must scroll inside the bubble, not stretch it off-screen. */
+
   .msg .body.md .tablewrap { overflow-x: auto; margin: 0 0 9px; }
   .msg .body.md table { border-collapse: collapse; font-size: 13px; }
   .msg .body.md th, .msg .body.md td {
@@ -462,7 +409,6 @@
   .msg .body.md th.r, .msg .body.md td.r { text-align: right; }
   .msg .body.md th.c, .msg .body.md td.c { text-align: center; }
 
-  /* Tool calls as chips: pending pulses, done gets a tick, failed a cross. */
   .acts { display: flex; flex-wrap: wrap; gap: 5px; margin: 4px 0 6px; }
   .chip {
     font: 11.5px "Cascadia Code", Consolas, monospace;
@@ -478,7 +424,6 @@
   .chip.fail { border-color: var(--bad); color: var(--bad); }
   @keyframes blink { 50% { opacity: .25; } }
 
-  /* Typing indicator while the model has said nothing yet. */
   .dots { display: inline-flex; gap: 4px; padding: 4px 2px; }
   .dots i {
     width: 6px; height: 6px; border-radius: 50%; background: var(--faint);
@@ -488,7 +433,6 @@
   .dots i:nth-child(3) { animation-delay: .3s; }
   @keyframes bounce { 30% { transform: translateY(-4px); opacity: 1; } }
 
-  /* Suggestion chips - one click instead of knowing what to type. */
   .chips { display: flex; flex-wrap: wrap; gap: 7px; padding: 4px 18px 10px;
            max-width: 1016px; margin: 0 auto; width: 100%; }
   .chips button {
@@ -506,8 +450,7 @@
     border-radius: 10px; outline: none;
     background: var(--bg); color: var(--ink);
     transition: border-color .15s, box-shadow .15s;
-    /* One line to start with, growing as the question does and stopping a
-       few lines in - past that it would push the conversation off screen. */
+
     resize: none; overflow-y: auto; line-height: 1.45; max-height: 160px;
   }
   .chat textarea::placeholder { color: var(--faint); }
@@ -550,19 +493,11 @@
   </div>
 </header>
 
-<!-- Only ever shown to an administrator standing in for somebody else. It is
-     deliberately loud: every question asked from here lands in that person's
-     conversation, under their Qlik identity. -->
 <div class="acting" id="actingBar" hidden>
   <span id="actingText"></span>
   <button id="btnStopActing" data-i18n="stopActing">Stop</button>
 </div>
 
-<!-- The connection to Qlik went away. The server rebuilds it by itself on
-     the next request, so this only appears when that did not work - Qlik is
-     genuinely down or still restarting. Then there is one thing to press,
-     rather than a red line about a websocket and a phone call to whoever
-     can restart the server. -->
 <div class="offline" id="offlineBar" hidden>
   <span id="offlineText"></span>
   <button id="btnReconnect" data-i18n="reconnect">Reconnect</button>
@@ -618,18 +553,6 @@
 <script>
 const $ = id => document.getElementById(id);
 let currentTab = null;
-
-// ----------------------------------------------------------------------
-// Language
-// ----------------------------------------------------------------------
-// The assistant answers in the reader's language. The software around it did
-// not, so a banker in Tashkent got Uzbek prose inside an English shell -
-// including the warning that Load data replaces every row, which is the one
-// message they most need to be able to read before clicking through it.
-//
-// Data is never translated. Field names, region names, deposit types and
-// everything else read out of the app keep the spelling Qlik has for them;
-// only the software's own words change.
 
 const LANGUAGES = [["en", "English"], ["ru", "Русский"], ["uz", "O'zbekcha"]];
 
@@ -899,10 +822,6 @@ const STRINGS = {
   },
 };
 
-// The browser's own preference is a better first guess than English, and the
-// choice is remembered per machine afterwards. Guarded like the theme code:
-// with site data blocked the accessor itself throws, and an exception here
-// runs at top level - the whole UI script dies with it.
 let lang = "";
 try { lang = localStorage.getItem("qlik-ai-lang") || ""; } catch (_) {}
 if (!STRINGS[lang]) {
@@ -923,8 +842,6 @@ function t(key, vars) {
   return text;
 }
 
-// Everything painted from a template is re-rendered by its own function; this
-// covers the markup that is written once in the page itself.
 function applyLanguage() {
   document.documentElement.lang = lang;
   const set = (attribute, apply) =>
@@ -945,9 +862,7 @@ function setStatus(text, kind) {
 
 async function api(path, options) {
   const response = await fetch(path, options);
-  // A session expires while the page is still open, and every button then
-  // fails with a message about being signed out that nobody can act on from
-  // here. Go to the login page instead, which is the thing to do about it.
+
   if (response.status === 401) {
     window.location.replace("/login");
     throw new Error("signed out");
@@ -956,25 +871,17 @@ async function api(path, options) {
     let detail = response.statusText;
     try { detail = (await response.json()).detail || detail; } catch (_) {}
     const error = new Error(detail);
-    // The server marks the one failure a person can do something about:
-    // the Qlik connection is gone and could not be rebuilt. Everything else
-    // is a message; this one is a message with a button.
+
     if (response.headers.get("X-Qlik-Reconnect") === "1") {
       error.reconnect = true;
       showOffline(detail);
     }
     throw error;
   }
-  // Any answer at all means the connection is back - including one from a
-  // request the person made for some other reason. The banner should not
-  // outlive the problem and wait to be dismissed.
+
   hideOffline();
   return response.json();
 }
-
-// ----------------------------------------------------------------------
-// Losing Qlik, and getting it back
-// ----------------------------------------------------------------------
 
 function showOffline(detail) {
   $("offlineText").textContent = detail || t("qlikLost");
@@ -993,11 +900,10 @@ $("btnReconnect").onclick = async () => {
     await api("/api/reconnect", {method: "POST"});
     hideOffline();
     setStatus(t("reconnected"), "good");
-    // Put the page back the way it was: the script, the sheets and the
-    // connections were all read through the connection that had gone.
+
     await load();
   } catch (e) {
-    // api() has already re-shown the banner with the current reason.
+
     showOffline(e.message);
   } finally {
     button.classList.remove("busy");
@@ -1010,8 +916,6 @@ function renderGutter() {
     Array.from({length: lines}, (_, i) => i + 1).join("\n");
 }
 
-// Set the script and keep the line numbers in step. Every path that changes
-// the buffer goes through here, so the gutter can't fall out of sync.
 function setScript(text) {
   $("script").value = text;
   renderGutter();
@@ -1022,8 +926,6 @@ $("script").addEventListener("scroll", () => {
   $("gutter").scrollTop = $("script").scrollTop;
 });
 
-// Ctrl+S saves the script instead of the browser offering to save the page,
-// and Tab indents instead of leaving the editor - both what an editor does.
 $("script").addEventListener("keydown", event => {
   if ((event.ctrlKey || event.metaKey) && event.key === "s") {
     event.preventDefault();
@@ -1044,9 +946,7 @@ function renderTabs(tabs) {
     const item = document.createElement("div");
     item.className = "item" + (name === currentTab ? " on" : "");
     item.textContent = name;
-    // Selecting a section scrolls the editor to it. The whole script stays
-    // in one editable buffer so the assistant and the person are never
-    // editing different copies of it.
+
     item.onclick = () => { currentTab = name; scrollToTab(name); renderTabs(tabs); };
     box.appendChild(item);
   });
@@ -1098,10 +998,6 @@ function renderChips() {
   });
 }
 
-// Qlik Sense Desktop keeps its own in-memory copy of an open app, so a sheet
-// created here is on disk but invisible in a Qlik window that was already
-// open. Showing the file's timestamp makes it obvious the work was saved and
-// that Qlik is the one holding a stale copy.
 function noteQlikCache(file) {
   const stamp = file && file.modified ? t("savedStamp", {when: file.modified}) : "";
   const note = document.createElement("div");
@@ -1117,8 +1013,6 @@ function noteQlikCache(file) {
   $("log").scrollTop = $("log").scrollHeight;
 }
 
-// Copy that also works over plain http:// on a LAN address, where the
-// clipboard API is unavailable because the page isn't a secure context.
 async function copyText(text) {
   try {
     await navigator.clipboard.writeText(text);
@@ -1136,12 +1030,6 @@ async function copyText(text) {
   }
 }
 
-// ---- Markdown -------------------------------------------------------------
-// The model answers in markdown. Rendering it here instead of pulling in a
-// library keeps the page working on an air-gapped Qlik box. Every value is
-// escaped before a tag is emitted, so neither model output nor a table cell
-// lifted straight out of the user's data can inject markup.
-
 const ESCAPE = {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"};
 const esc = s => String(s).replace(/[&<>"']/g, c => ESCAPE[c]);
 
@@ -1156,19 +1044,13 @@ const startsBlock = l =>
   RE_FENCE.test(l) || RE_HEAD.test(l) || RE_HR.test(l) ||
   RE_QUOTE.test(l) || RE_ITEM.test(l);
 
-// Only schemes that cannot execute. Anything else keeps its label as plain
-// text, so a "javascript:" link degrades into words instead of a trap.
 const href = (url, label) =>
   /^(https?:\/\/|mailto:|#)/i.test(url.replace(/&amp;/g, "&"))
     ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`
     : label;
 
 function mdInline(raw) {
-  // Code spans come out first so their contents survive untouched: `**x**`
-  // between backticks has to stay asterisks.
-  // The placeholder is wrapped in angle brackets because esc() has already
-  // removed every raw one, so "<0>" cannot collide with the text itself. The
-  // tags added below are never all-digits, so they survive the restore too.
+
   const spans = [];
   let s = esc(raw).replace(/`([^`]+)`/g, (_, code) =>
     "<" + (spans.push(`<code>${code}</code>`) - 1) + ">");
@@ -1205,8 +1087,7 @@ function mdBlocks(lines) {
         return m && m[1][0] === mark[0] && m[1].length >= mark.length && !m[2];
       };
       i++;
-      // A fence with no closer is normal mid-stream. Close it and render, so
-      // a code block does not flash as raw text while the tokens arrive.
+
       while (i < lines.length && !closes(lines[i])) buf.push(lines[i++]);
       i++;
       out.push(`<pre${lang ? ` data-lang="${esc(lang)}"` : ""}>` +
@@ -1232,7 +1113,6 @@ function mdBlocks(lines) {
       continue;
     }
 
-    // A table is only a table if the row under the header is the delimiter.
     if (line.includes("|") && RE_DELIM.test(lines[i + 1] || "")) {
       const cells = r => r.trim().replace(/^\|/, "").replace(/\|$/, "").split("|")
                           .map(c => c.trim());
@@ -1264,8 +1144,7 @@ function mdBlocks(lines) {
         const chunk = [m[3]];
         items.push(chunk);
         i++;
-        // Indented follow-on lines belong to the item just opened — that is
-        // how a nested list or a second paragraph hangs off a bullet.
+
         while (i < lines.length && lines[i].trim() && /^\s{2,}/.test(lines[i]))
           chunk.push(lines[i++].replace(/^ {1,4}/, ""));
       }
@@ -1285,7 +1164,7 @@ function mdBlocks(lines) {
       buf.push(l);
       i++;
     }
-    // Never leave the cursor unmoved: an unconsumed line would spin forever.
+
     if (!buf.length) { buf.push(line); i++; }
     out.push(`<p>${buf.map(l => mdInline(l.trim())).join("<br>")}</p>`);
   }
@@ -1293,14 +1172,10 @@ function mdBlocks(lines) {
   return out.join("");
 }
 
-// A tight list: the item's own text needs no paragraph wrapper, whether or
-// not a nested list follows it. Blocks after the first keep theirs.
 function mdListItem(chunk) {
   return mdBlocks(chunk).replace(/^<p>((?:(?!<\/p>)[\s\S])*)<\/p>/, "$1");
 }
 
-// Rendered bodies keep their markdown source so Copy yields what the model
-// actually wrote, not the flattened text the browser ends up showing.
 function setBody(el, src, asMarkdown) {
   el.dataset.raw = src == null ? "" : src;
   el.classList.toggle("md", !!asMarkdown);
@@ -1310,8 +1185,6 @@ function setBody(el, src, asMarkdown) {
 
 const bodyText = el => ("raw" in el.dataset ? el.dataset.raw : el.textContent);
 
-// Re-rendering on every token would reflow the log hundreds of times for one
-// long answer. One render per frame looks identical and costs far less.
 function streamBody(el, after) {
   let pending = null, queued = false;
   const paint = () => {
@@ -1327,13 +1200,11 @@ function streamBody(el, after) {
       queued = true;
       requestAnimationFrame(paint);
     },
-    // Wins over any frame still queued, which would only repaint the same text.
+
     set(src) { pending = src; paint(); },
   };
 }
 
-// getText is a function, not a string: the assistant's reply is still being
-// streamed when its button is created.
 function copyButton(getText) {
   const button = document.createElement("button");
   button.type = "button";
@@ -1360,8 +1231,7 @@ function addMessage(role, body) {
   wrap.firstChild.textContent = t(you ? "you" : "assistant");
   const text = document.createElement("div");
   text.className = "body";
-  // Only the assistant writes markdown. What someone typed is shown back to
-  // them exactly as typed, asterisks and all.
+
   setBody(text, body, !you);
   wrap.firstChild.appendChild(copyButton(() => bodyText(text)));
   wrap.appendChild(text);
@@ -1370,21 +1240,10 @@ function addMessage(role, body) {
   return text;
 }
 
-// ---- Saved conversations --------------------------------------------------
-// The server owns the history: its message list is what the model actually
-// remembers, so opening a chat has to go through it rather than being
-// replayed from anything kept here. This code only paints the result.
-
 let chatId = null;
 
-// The turn currently streaming, or null. One at a time, so one controller is
-// enough. Declared up here with the other page-wide state because load() and
-// the submit handler both read it, and both can run before the chat section
-// further down has been reached.
 let turn = null;
 
-// Coarse on purpose: the exact minute a chat was last touched is never the
-// question, only roughly how long ago it was.
 function ago(iso) {
   if (!iso) return "";
   const seconds = (Date.now() - new Date(iso).getTime()) / 1000;
@@ -1455,8 +1314,6 @@ function renderHistory(chats, activeId) {
   }
 }
 
-// Only what was actually said: the server leaves the system prompt and the
-// tool traffic out, so reopening a chat shows the conversation, not the log.
 function repaint(entries) {
   $("log").innerHTML = "";
   for (const entry of entries || []) {
@@ -1467,7 +1324,7 @@ function repaint(entries) {
 }
 
 async function refreshHistory() {
-  // History is a convenience. Losing the list must not take the chat with it.
+
   try {
     const result = await api("/api/chats");
     renderHistory(result.chats, result.chat_id);
@@ -1479,23 +1336,19 @@ async function refreshHistory() {
 async function openChat(id) {
   if (id === chatId) return;
   try {
-    // POST: opening switches the server's live conversation, and a GET
-    // that mutates gets prefetched by the browser into surprise switches.
+
     const chat = await api("/api/chats/" + encodeURIComponent(id) + "/open",
                            {method: "POST"});
     chatId = chat.chat_id;
     repaint(chat.transcript);
-    // The chat's app could not be reopened: the transcript is back, but
-    // the answers are about a different app than the one open now.
+
     if (chat.warning) setStatus(chat.warning, "bad");
     if (chat.app_switched) {
-      // Opening the chat switched back to the app it was about, so the
-      // editor needs that app's script and tabs, not just the transcript.
+
       await load();
       return;
     }
-    // Re-read so the highlight lands on the chat now open. The order itself
-    // no longer changes: visiting a chat does not re-date it.
+
     await refreshHistory();
   } catch (e) {
     setStatus(t("couldNotOpenChat", {error: e.message}), "bad");
@@ -1513,8 +1366,6 @@ async function newChat() {
   }
 }
 
-// Renaming touches the name and nothing else: the chat keeps its place in
-// the list, because it is ordered by when it was last talked in.
 async function renameChat(id, current) {
   const title = prompt(t("renamePrompt"), current || "");
   if (title === null || !title.trim()) return;
@@ -1535,7 +1386,7 @@ async function removeChat(id, title) {
   try {
     const wasOpen = id === chatId;
     const result = await api("/api/chats/" + encodeURIComponent(id), {method: "DELETE"});
-    // Deleting the chat you are reading leaves a fresh empty one in its place.
+
     if (wasOpen) repaint([]);
     renderHistory(result.chats, result.chat_id);
   } catch (e) {
@@ -1549,9 +1400,7 @@ function welcome() {
   if (!$("log").children.length) {
     addMessage("assistant", t("welcome"));
   }
-  // Centered input until a conversation exists, docked once it does. Keyed
-  // on real user messages, not just log entries, so the welcome text alone
-  // still counts as "empty".
+
   $("chat").classList.toggle("empty", !$("log").querySelector(".msg.you"));
 }
 
@@ -1566,10 +1415,7 @@ function renderOptions(options) {
   const modelSel = $("modelSel");
   modelSel.innerHTML = "";
   options.models.forEach(model => {
-    // Unusable models stay visible but disabled, so it's clear why a model
-    // you have installed isn't an option rather than it silently missing.
-    // Cloud models are selectable but labelled - they are much faster, and
-    // they are also the one choice that sends your data off the machine.
+
     const size = model.size_gb ? ` (${model.size_gb}G)` : "";
     const why = model.reason ? ` - ${model.reason}` : "";
     const option = new Option(
@@ -1577,9 +1423,7 @@ function renderOptions(options) {
       model.name, false, model.name === options.model
     );
     option.disabled = !model.usable;
-    // Carried as data rather than read back out of the label: the ☁ prefix
-    // is display text, and sniffing it breaks the moment the label is
-    // reworded or a model name happens to start the same way.
+
     if (model.cloud) option.dataset.cloud = "1";
     modelSel.appendChild(option);
   });
@@ -1603,8 +1447,7 @@ async function select(change) {
 }
 
 $("appSel").onchange = event => {
-  // The conversation was about the previous app's fields, so the server
-  // files it away and starts a fresh one. load() then paints the new state.
+
   $("log").innerHTML = "";
   select({app: event.target.value});
 };
@@ -1618,11 +1461,6 @@ $("modelSel").onchange = event => {
 };
 $("allowReload").onchange = event => select({allow_reload: event.target.checked});
 
-// ---- Who is signed in -----------------------------------------------------
-
-// Rendered from /api/state rather than a call of its own: the page already
-// waits on that one, and a second request only to name the person would put
-// a second round trip in front of the first paint.
 function renderAccount(user) {
   const box = $("account");
   if (!user) { box.hidden = true; return; }
@@ -1663,8 +1501,7 @@ async function load() {
   renderAccount(state.user);
   $("meta").textContent = state.mode;
   $("allowReload").checked = state.allow_reload !== false;
-  // Qlik works without Ollama; only the assistant needs it. Say which half
-  // is down instead of looking broken.
+
   const ready = state.assistant_ready !== false;
   $("chatInput").placeholder = t(ready ? "askPlaceholder" : "askPlaceholderOffline");
   $("chatHint").textContent = t(ready ? "hint" : "hintOffline");
@@ -1673,15 +1510,9 @@ async function load() {
   renderTabs(state.tabs);
   renderConnections(state.connections);
   renderChips();
-  // The server kept the conversation across the refresh; put it back on
-  // screen rather than greeting someone mid-chat with an empty log.
+
   chatId = state.chat_id || null;
-  // Not while a turn is streaming. repaint() empties the log and rebuilds it
-  // from the server's transcript, and this turn is not in that transcript
-  // yet - it is persisted when it finishes. Mid-stream that erases the
-  // question and the half-written answer, and leaves the stream writing into
-  // a node no longer in the page, so the reply never appears at all.
-  // Switching language is the way in: it calls load() to repaint the chrome.
+
   if (!turn) repaint(state.transcript);
   refreshHistory();
   try {
@@ -1715,7 +1546,7 @@ $("btnReload").onclick = async () => {
   btn.disabled = true;
   btn.classList.add("busy");
   try {
-    // Save the buffer first, or the reload runs the previous script.
+
     await api("/api/script", {
       method: "PUT",
       headers: {"Content-Type": "application/json"},
@@ -1745,9 +1576,6 @@ function typingDots() {
   return dots;
 }
 
-// Streamed: each tool call shows the moment it is decided and the answer
-// arrives word by word. A local model can take minutes on a multi-step
-// request, and waiting in silence for it is indistinguishable from a hang.
 async function ask(question) {
   $("chat").classList.remove("empty");
   addMessage("user", question);
@@ -1769,8 +1597,6 @@ async function ask(question) {
   scroll();
   const stream = streamBody(body, scroll);
 
-  // The button becomes Stop for the duration. A local model can run for
-  // minutes, and a question sent by accident otherwise has to be waited out.
   setSending(true);
   let answer = "";
   let chip = null;
@@ -1783,10 +1609,7 @@ async function ask(question) {
       body: JSON.stringify({message: question}),
       signal: turn.signal,
     });
-    // Not api(): this one reads the body as a stream rather than as JSON.
-    // The failure handling still has to match, or a lost connection during a
-    // question shows "Service Unavailable" and no way to act on it - while
-    // every other button on the page offers Reconnect.
+
     if (!response.ok) {
       let detail = response.statusText;
       try { detail = (await response.json()).detail || detail; } catch (_) {}
@@ -1804,7 +1627,6 @@ async function ask(question) {
       if (finished) break;
       buffer += decoder.decode(value, {stream: true});
 
-      // SSE frames are separated by a blank line.
       const frames = buffer.split("\n\n");
       buffer = frames.pop();
 
@@ -1827,7 +1649,7 @@ async function ask(question) {
           }
           scroll();
         } else if (event.type === "token") {
-          if (!answer) body.textContent = "";   // clears the typing dots
+          if (!answer) body.textContent = "";
           answer += event.text;
           stream.update(answer);
         } else if (event.type === "done") {
@@ -1836,8 +1658,7 @@ async function ask(question) {
           setBody(body, "Error: " + event.message, false);
           scroll();
         } else if (event.type === "final") {
-          // The first question is what names the chat, and may be what
-          // created it — so the rail is refreshed from the same event.
+
           if (event.chats) renderHistory(event.chats, event.chat_id);
           if (event.script_changed) {
             setScript(event.script);
@@ -1849,13 +1670,9 @@ async function ask(question) {
       }
     }
   } catch (e) {
-    // Aborting a fetch rejects it, which is not a failure worth showing as
-    // one - the user asked for it. What they do need is to see that what ran
-    // before they pressed Stop is still on the sheet.
+
     if (e.name === "AbortError") {
-      // Only mention what survived if something actually ran. Telling
-      // someone their work is safe after a turn that did nothing but type
-      // reads as though it built something and hid it.
+
       stream.set(
         (answer ? answer + "\n\n" : "") + t(done.length ? "stoppedKept" : "stopped")
       );
@@ -1871,16 +1688,12 @@ async function ask(question) {
 
 function setSending(sending) {
   const button = $("btnSend");
-  // Cleared on the way out as well as set on the way in: the form's submit
-  // handler reads this to decide whether it is sending or stopping, so a
-  // stale controller would leave the button stopping a turn that had
-  // already finished.
+
   turn = sending ? new AbortController() : null;
   button.textContent = sending ? t("stop") : t("send");
   button.dataset.i18n = sending ? "stop" : "send";
   button.classList.toggle("stopping", sending);
-  // Never disabled now: disabling it was what made a mistyped question
-  // something you had to sit through.
+
   button.disabled = false;
 }
 
@@ -1888,14 +1701,8 @@ function stopTurn() {
   if (turn) turn.abort();
 }
 
-// The box is a textarea so a question can have more than one line in it -
-// an <input> cannot hold a newline at all. A textarea does not submit on
-// Enter by itself, so the two keys are wired up here: Enter sends, and
-// Shift+Enter does what it does everywhere else and breaks the line.
 function submitQuestion() {
-  // Enter during a turn would start a second one, which the server
-  // serialises on its own lock - so the question sits there looking ignored
-  // until the first finishes. Stop first, then ask.
+
   if (turn) return;
   const box = $("chatInput");
   const question = box.value.trim();
@@ -1905,8 +1712,6 @@ function submitQuestion() {
   ask(question);
 }
 
-// Grown to fit rather than scrolled: a question worth typing over several
-// lines is worth being able to read back before sending it.
 function growInput() {
   const box = $("chatInput");
   box.style.height = "auto";
@@ -1916,8 +1721,7 @@ function growInput() {
 $("chatInput").addEventListener("input", growInput);
 
 $("chatInput").addEventListener("keydown", event => {
-  // isComposing: mid-composition Enter is the IME accepting a character,
-  // not the person sending - and this interface is used in three languages.
+
   if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
   event.preventDefault();
   submitQuestion();
@@ -1925,15 +1729,10 @@ $("chatInput").addEventListener("keydown", event => {
 
 $("chatForm").onsubmit = event => {
   event.preventDefault();
-  // The same button does both jobs, so which one depends on whether a turn
-  // is in flight. Submitting while streaming means Stop.
+
   if (turn) stopTurn(); else submitQuestion();
 };
 
-// ----------------------------------------------------------------------
-// Theme. The head script already applied the saved choice; this wires the
-// picker and keeps "Auto" following the machine while the page is open.
-// ----------------------------------------------------------------------
 const THEME_KEY = "qlikai-theme";
 const systemDark = matchMedia("(prefers-color-scheme: dark)");
 let themePref = "system";
@@ -1958,11 +1757,6 @@ $("theme").onclick = event => {
 systemDark.addEventListener("change", () => { if (themePref === "system") applyTheme(); });
 applyTheme();
 
-// ----------------------------------------------------------------------
-// Resizable layout. Each divider drags, side panels snap closed when
-// dragged small, double-click restores the default, and the result is
-// remembered across reloads.
-// ----------------------------------------------------------------------
 const rootStyle = document.documentElement.style;
 const LAYOUT_KEY = "qlikai-layout";
 let layout = {};
@@ -1982,8 +1776,6 @@ function saveLayout() {
   try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch (_) {}
 }
 
-// Below this a panel is unreadable anyway, so it snaps shut instead of
-// lingering as a sliver. Drag it back out (or double-click) to reopen.
 const snapPanel = value => value < 60 ? 0 : Math.min(Math.max(value, 120), 480);
 
 function draggable(handle, key, compute) {
@@ -2027,14 +1819,10 @@ $("langSel").onchange = event => {
   try { localStorage.setItem("qlik-ai-lang", lang); } catch (_) {}
   applyLanguage();
   pinLanguage();
-  // load() repaints the parts built from templates - chips, the hint, the
-  // placeholder, the history list - which applyLanguage() cannot reach.
+
   load().catch(e => setStatus(t("couldNotReachQlik", {error: e.message}), "bad"));
 };
 
-// The assistant answers in whatever the question was written in unless it is
-// told otherwise; this is the telling. Failing to reach the server costs the
-// assistant's language, not the interface's, so it is not fatal.
 function pinLanguage() {
   api("/api/select", {
     method: "POST",

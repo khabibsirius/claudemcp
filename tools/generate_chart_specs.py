@@ -1,21 +1,3 @@
-"""Turn the extracted Qlik chart definitions into a Python module.
-
-    node tools/extract_chart_specs.js > tools/chart_defaults.json
-    python tools/generate_chart_specs.py
-
-Writes chart_defaults.py at the repo root: for every chart type Qlik ships,
-its default property tree and how many dimensions and measures it accepts.
-
-Both inputs come from the installed Qlik client, not from documentation:
-
-  chart_defaults.json  each bundle's `qae.properties` and `qae.data.targets`
-  chart_types.json     bundle name -> the qType the engine expects
-
-The second is not guessable. sn-funnel-chart is "qlik-funnel-chart-ext",
-sn-table is "sn-table" rather than "table", and getting it wrong produces an
-object the client cannot render.
-"""
-
 import json
 import pathlib
 import pprint
@@ -23,13 +5,8 @@ import pprint
 HERE = pathlib.Path(__file__).parent
 ROOT = HERE.parent
 
-# Types that already have hand-verified property trees in chart_specs.py,
-# confirmed rendering in a real app. Those stay authoritative - the point of
-# this file is the ones we could not build before.
 ALREADY_VERIFIED = {"kpi", "barchart", "linechart", "piechart", "table"}
 
-# Objects that hold no data of their own. They are legitimate sheet contents
-# but they are not charts, so they are kept out of the chart list.
 NON_DATA = {
     "sn-action-button", "sn-layout-container", "sn-nav-menu", "sn-shape",
     "sn-slider", "sn-tabbed-container", "sn-animator", "sn-text",
@@ -37,20 +14,12 @@ NON_DATA = {
 
 
 def unwrap(properties):
-    """Some bundles nest everything under `initial`; use what's inside."""
     if set(properties) == {"initial"} and isinstance(properties["initial"], dict):
         return unquote(properties["initial"])
     return unquote(properties)
 
 
 def unquote(properties):
-    """Strip quotes a bundle wrote INTO a string value.
-
-    A few bundles declare their version as the six characters "0.8.13" -
-    quotes included - and copying that through verbatim sent the engine a
-    doubly-quoted version string. Only whole-value quoting is stripped; a
-    quote in the middle of a label is the label's own.
-    """
     if isinstance(properties, dict):
         return {key: unquote(value) for key, value in properties.items()}
     if isinstance(properties, list):
@@ -63,12 +32,6 @@ def unquote(properties):
 
 
 def counts(targets):
-    """(min, max) dimensions and measures, from the bundle's own targets.
-
-    This is the part no amount of reading documentation would have given us:
-    a scatter plot needs exactly one dimension and two to three measures, so
-    building one with a single measure produces something that cannot draw.
-    """
     dimensions = (0, 0)
     measures = (0, 0)
 
@@ -96,8 +59,6 @@ def main():
 
         qtype = types.get(bundle)
         if not qtype:
-            # No registry entry means no way to know what the engine calls
-            # it, and a guessed qType renders as an unknown object.
             skipped.append(f"{bundle} (no engine type in the client registry)")
             continue
 

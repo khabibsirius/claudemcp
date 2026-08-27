@@ -1,10 +1,3 @@
-"""Dashboard quality: layout order, duplicates, and useless dimensions.
-
-A dashboard that renders is not the same as a dashboard worth looking at.
-These are the checks that turn "technically five charts" into something a
-person can read.
-"""
-
 import pytest
 
 from dashboard_builder import arrange, build_dashboard, normalize_visualization, validate_visualization
@@ -26,8 +19,6 @@ def viz(type_, title, dimension="", expression="Sum([Sales])"):
 
 
 class RecordingEngine:
-    """Captures what would be created, without touching Qlik."""
-
     sheet_id = "SH_test"
 
     def __init__(self):
@@ -44,14 +35,11 @@ class RecordingEngine:
 
 
 class TestLayoutOrder:
-    """Charts are placed in build order, so order is the layout."""
-
     def test_kpis_come_first(self):
         ordered = arrange([viz("barchart", "b"), viz("kpi", "k"), viz("table", "t")])
         assert [v["type"] for v in ordered] == ["kpi", "barchart", "table"]
 
     def test_tables_come_last(self):
-        """A table is full width; anything after it is pushed off the fold."""
         ordered = arrange([viz("table", "t"), viz("piechart", "p"), viz("kpi", "k")])
         assert ordered[-1]["type"] == "table"
 
@@ -73,8 +61,6 @@ class TestLayoutOrder:
 
 
 class TestDuplicateRejection:
-    """Models cheerfully chart the same number three ways."""
-
     def build(self, visualizations):
         engine = RecordingEngine()
         spec = {"dashboard_title": "D", "visualizations": visualizations}
@@ -90,7 +76,6 @@ class TestDuplicateRejection:
         assert "duplicate" in skipped[0][1]
 
     def test_the_same_data_in_a_different_chart_type_is_kept(self):
-        """A KPI and a bar chart of the same measure are not redundant."""
         _, (built, _) = self.build([
             viz("kpi", "Total sales"),
             viz("barchart", "Sales by market", "Market"),
@@ -105,8 +90,6 @@ class TestDuplicateRejection:
         assert len(built) == 2
 
     def test_the_same_chart_with_a_different_limit_is_kept(self):
-        """The regression: "Top 5 markets" was skipped as a duplicate of
-        the all-markets chart because the signature ignored the limit."""
         _, (built, _) = self.build([
             viz("barchart", "Sales by market", "Market"),
             dict(viz("barchart", "Top 5 markets", "Market"), limit=5),
@@ -124,7 +107,6 @@ class TestDuplicateRejection:
 class TestUselessDimensions:
 
     def test_a_constant_dimension_is_rejected(self):
-        """Grouping by a field with one value draws exactly one bar."""
         spec = normalize_visualization(viz("barchart", "By country", "Country"))
         error = validate_visualization(
             spec, {f["name"] for f in FIELDS},
@@ -155,11 +137,11 @@ class TestBuiltSheetShape:
     def test_a_messy_spec_becomes_an_ordered_deduplicated_sheet(self):
         engine = RecordingEngine()
         spec = {"dashboard_title": "Sales", "visualizations": [
-            viz("table", "Everything by order", "Order Id"),      # identifier
+            viz("table", "Everything by order", "Order Id"),
             viz("barchart", "Sales by market", "Market"),
-            viz("barchart", "Market sales again", "Market"),      # duplicate
+            viz("barchart", "Market sales again", "Market"),
             viz("kpi", "Total sales"),
-            viz("piechart", "By country", "Country"),             # constant
+            viz("piechart", "By country", "Country"),
             viz("piechart", "Share by segment", "Customer Segment"),
         ]}
 

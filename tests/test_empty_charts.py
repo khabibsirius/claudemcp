@@ -1,18 +1,3 @@
-"""Charts that are well-formed and still show nothing.
-
-Every other check in dashboard_builder asks whether a chart is well FORMED:
-the field exists, the expression parses, the dimension is a category rather
-than an id. A chart can pass all of it and still render an empty box, because
-"valid" and "returns data" are different questions. Sum([Branch Name]) is a
-real aggregation over a real field that totals nothing; a set analysis can
-select down to no rows.
-
-That empty box is worse than a refusal - the person is told the chart was
-built, and finds out weeks later it never showed anything. So the chart is
-queried against the live app before it is committed, and what it returns is
-handed back to the caller so the reply describes contents rather than titles.
-"""
-
 import pytest
 
 from chat_tools import _chart_preview, create_chart
@@ -38,21 +23,13 @@ def viz(title="Deposits by region", dimension="Region",
 
 
 class ProbeEngine:
-    """An engine whose query results are dictated by the test.
-
-    Keyed by expression, because the whole point of the probe is that two
-    expressions which both pass check_expression return different things.
-    """
-
     sheet_id = "SH_test"
-    sheet_handle = 1  # a sheet is already open, as it is after a build
+    sheet_handle = 1
 
     def __init__(self, results=None):
         self.results = results or {}
         self.charts = []
         self.queries = []
-
-    # -- what the probe consults ---------------------------------------
 
     def check_expression(self, expression):
         return {"valid": True, "error": "", "bad_fields": [], "expression": expression}
@@ -61,8 +38,6 @@ class ProbeEngine:
         self.queries.append((tuple(dimensions or []), tuple(measures or [])))
         expression = (measures or [""])[0]
         if expression not in self.results:
-            # Default: a healthy chart, so a test only has to describe the
-            # broken case it is actually about.
             return {
                 "columns": ["Region", expression],
                 "rows": [
@@ -76,8 +51,6 @@ class ProbeEngine:
 
     def get_fields(self):
         return FIELDS
-
-    # -- what building consults ----------------------------------------
 
     def create_sheet(self, title, description="Created by AI"):
         self.title = title
@@ -97,21 +70,17 @@ EMPTY = {"columns": ["Region", "Sum([Deposits])"], "rows": [],
 
 
 class TestAnEmptyChartIsRefused:
-    """The check that was missing: valid, and still nothing to look at."""
-
     def test_no_rows_is_rejected(self):
         engine = ProbeEngine({"Sum([Deposits])": EMPTY})
         error = validate_visualization(viz(), {"Deposits", "Region"}, engine=engine)
         assert error and "no rows" in error
 
     def test_the_reason_says_it_would_render_blank(self):
-        """The model acts on the reason, so it has to name the symptom."""
         engine = ProbeEngine({"Sum([Deposits])": EMPTY})
         error = validate_visualization(viz(), {"Deposits", "Region"}, engine=engine)
         assert "blank" in error
 
     def test_a_text_field_aggregation_is_rejected(self):
-        """Sum of a name is valid Qlik and draws nothing."""
         engine = ProbeEngine({
             "Sum([Branch Name])": {
                 "columns": ["Region", "Sum([Branch Name])"],
@@ -133,8 +102,6 @@ class TestAnEmptyChartIsRefused:
 
 
 class TestTheProbeIsBestEffort:
-    """A chart is not worth refusing because the lookup itself failed."""
-
     def test_a_failing_query_does_not_reject_the_chart(self):
         class Broken(ProbeEngine):
             def query(self, **kwargs):
@@ -150,7 +117,6 @@ class TestTheProbeIsBestEffort:
 
     @pytest.mark.parametrize("type_", ["filterpane", "histogram", "qlik-word-cloud"])
     def test_types_that_aggregate_nothing_are_not_probed(self, type_):
-        """There is no measure to read back, so there is nothing to call empty."""
         engine = ProbeEngine({"Sum([Deposits])": EMPTY})
         preview, problem = probe_visualization(engine, viz(type_=type_))
         assert (preview, problem) == (None, None)
@@ -158,8 +124,6 @@ class TestTheProbeIsBestEffort:
 
 
 class TestThePreviewSaysWhatWasBuilt:
-    """Type and title describe a chart nobody has seen the inside of."""
-
     def test_a_grouped_chart_reports_its_largest_category(self):
         preview, _ = probe_visualization(ProbeEngine(), viz())
         assert preview["largest"] == {"label": "г.Алматы", "value": 90049825.0}
@@ -182,7 +146,6 @@ class TestThePreviewSaysWhatWasBuilt:
         assert preview["value"] == 121092479.0
 
     def test_an_all_zero_chart_is_built_but_flagged(self):
-        """Zero can be real, so it is reported rather than refused."""
         engine = ProbeEngine({
             "Sum([Deposits])": {
                 "columns": ["Region", "Sum([Deposits])"],
@@ -195,8 +158,6 @@ class TestThePreviewSaysWhatWasBuilt:
         assert "warning" in preview
 
     def test_the_probe_runs_once_per_chart(self):
-        """design_full_dashboard validates, then build_dashboard validates
-        again. A probe is a real query, so the second pass reuses the first."""
         engine = ProbeEngine()
         spec = viz()
         validate_visualization(spec, {"Deposits", "Region"}, engine=engine)
@@ -205,8 +166,6 @@ class TestThePreviewSaysWhatWasBuilt:
 
 
 class TestWhatTheCallerIsTold:
-    """The tool result is the model's only evidence of what it made."""
-
     def test_built_charts_carry_what_they_show(self):
         engine = ProbeEngine()
         result = build_sheet(engine, "Overview", [viz()], fields=FIELDS)
@@ -225,8 +184,6 @@ class TestWhatTheCallerIsTold:
 
 
 class TestCreateChartChecksTheSameThing:
-    """create_chart builds the multi-dimension types and had the same hole."""
-
     def test_an_empty_chart_is_refused(self):
         engine = ProbeEngine({"Sum([Deposits])": EMPTY})
         result = create_chart(
@@ -246,11 +203,6 @@ class TestCreateChartChecksTheSameThing:
         assert result["created"]["shows"]["largest"]["label"] == "г.Алматы"
 
     def test_a_multi_dimension_chart_is_probed_on_every_dimension(self):
-        """The cube the chart runs is the only cube worth testing.
-
-        Two dimensions that each hold data can still return nothing when
-        combined, and that combination is what the chart draws.
-        """
         engine = ProbeEngine()
         _chart_preview(
             engine, "qlik-sankey-chart-ext",
@@ -261,11 +213,6 @@ class TestCreateChartChecksTheSameThing:
         ]
 
     def test_a_second_measure_that_returns_nothing_is_caught(self):
-        """The scatter plot that reported real numbers and drew no points.
-
-        Probing only the first measure passes a chart whose Y axis is empty:
-        X is perfect, every point is missing, and the chart renders blank.
-        """
         engine = ProbeEngine({
             "Sum([Deposits])": {
                 "columns": ["Branch Name", "Sum([Deposits])", "Sum([Staff])"],
@@ -294,7 +241,6 @@ class TestCreateChartChecksTheSameThing:
         ]
 
     def test_the_preview_quotes_the_first_measure_not_the_last(self):
-        """A chart is read by its primary measure."""
         engine = ProbeEngine({
             "Sum([Deposits])": {
                 "columns": ["Branch Name", "Sum([Deposits])", "Sum([Staff])"],

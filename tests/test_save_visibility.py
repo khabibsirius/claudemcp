@@ -1,12 +1,3 @@
-"""Proving a save reached disk.
-
-Qlik Sense Desktop keeps its own in-memory copy of an open document. A sheet
-created through the Engine API is genuinely written to the .qvf and still
-invisible in a Qlik window that already had the app open - which reads as
-"the software didn't do anything". The file's timestamp is what separates
-"it didn't save" from "Qlik is showing a cached copy".
-"""
-
 from datetime import datetime
 
 import pytest
@@ -19,7 +10,6 @@ DOC_LIST = {"qDocList": [
         "qDocName": "data.qvf",
         "qTitle": "data",
         "qFileSize": 9932800,
-        # 2026-08-03 14:33:31 as a Qlik serial date.
         "qFileTime": 46237.6066087963,
     },
     {"qDocId": "other.qvf", "qTitle": "other", "qFileSize": 1, "qFileTime": 1.0},
@@ -69,7 +59,6 @@ class TestAppFileInfo:
         assert engine.app_file_info() is None
 
     def test_a_failing_doc_list_is_not_fatal(self, engine):
-        """Reporting the timestamp is a nicety; losing it must not break save."""
         engine.ws.handlers = {"GetDocList": {"error": {"message": "nope"}}}
         engine.app_id = engine.app_name = "data"
         assert engine.app_file_info() is None
@@ -92,7 +81,6 @@ class TestThePageExplainsIt:
         assert "close the app in Qlik" in html
 
     def test_the_note_warns_against_saving_from_qlik(self):
-        """Qlik's older in-memory copy would overwrite what was just written."""
         import web_app
 
         html = web_app.INDEX.read_text(encoding="utf-8")

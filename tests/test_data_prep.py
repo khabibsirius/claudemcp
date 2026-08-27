@@ -1,5 +1,3 @@
-"""Data quality analysis and load-script tab handling."""
-
 import pytest
 
 from data_prep import (
@@ -47,11 +45,9 @@ class TestQualityFindings:
         findings = analyse_tables([table(fields=[field("Notes", density=0.3)])])
         assert findings[0]["severity"] == "medium"
         assert findings[0]["issue"] == "sparse"
-        assert "700" in findings[0]["detail"]  # 70% of 1000 rows null
+        assert "700" in findings[0]["detail"]
 
     def test_sparse_detail_without_a_null_count_does_not_invent_one(self):
-        """The engine can supply density alone; the defaulted count produced
-        'null in 0 of 1,000 rows (60.0%)', which contradicts itself."""
         f = field("Notes", density=0.4)
         del f["null_count"]
         findings = analyse_tables([table(fields=[f])])
@@ -130,7 +126,6 @@ class TestScriptTabs:
         assert names == ["Main", "other", GENERATED_TAB]
 
     def test_preserves_hand_written_tabs(self):
-        """The whole point of writing into its own tab."""
         result = replace_tab(self.SCRIPT, "LOAD 1 AS x AUTOGENERATE 1;")
         assert "LIB CONNECT TO 'rest';" in result
         assert "LOAD * FROM [lib://data/x.csv];" in result

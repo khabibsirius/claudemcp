@@ -1,11 +1,3 @@
-"""Facts read out of a sheet, and the arithmetic behind them.
-
-The point of insights.py is that the model never does this sum. So these
-tests are the only thing standing between a banking user and a confidently
-worded percentage that is wrong - which is worse than no percentage, because
-they have no way to check it.
-"""
-
 import pytest
 
 import insights
@@ -13,12 +5,6 @@ from insights import analyse_chart, analyse_sheet
 
 
 class FakeEngine:
-    """Answers queries from a canned table, and records what was asked.
-
-    The recording matters: a trend read off a measure-sorted series is not a
-    trend, so the sort flag the caller passed is part of what is under test.
-    """
-
     def __init__(self, charts=None, rows=None, fields=None, total_rows=None):
         self.charts = charts or []
         self.rows = rows or {}
@@ -64,8 +50,6 @@ def rows_for(dimension, pairs):
 REGIONS = [("Almaty", 80.0), ("Astana", 60.0), ("Karaganda", 40.0), ("Turkistan", 20.0)]
 
 
-# -- the sums themselves ------------------------------------------------
-
 def test_share_and_total_come_from_the_rows():
     engine = FakeEngine(rows={"Region": rows_for("Region", REGIONS)})
     facts = analyse_chart(engine, chart())["facts"]
@@ -85,7 +69,6 @@ def test_concentration_is_the_top_three_share():
 
 
 def test_ranking_does_not_assume_the_query_came_back_sorted():
-    """The engine sorts, but a scrambled page must not produce a wrong top."""
     scrambled = [("Astana", 60.0), ("Turkistan", 20.0), ("Almaty", 80.0), ("Karaganda", 40.0)]
     engine = FakeEngine(rows={"Region": rows_for("Region", scrambled)})
     facts = analyse_chart(engine, chart())["facts"]
@@ -95,16 +78,11 @@ def test_ranking_does_not_assume_the_query_came_back_sorted():
 
 
 def test_fewer_than_four_categories_has_no_concentration():
-    """"The top 3 of 3 hold 100%" is arithmetic, not a finding."""
     engine = FakeEngine(rows={"Region": rows_for("Region", REGIONS[:3])})
     assert "concentration" not in analyse_chart(engine, chart())["facts"]
 
 
-# -- the guard that stops a meaningless percentage ----------------------
-
 def test_an_average_gets_no_total_and_no_share():
-    """Averaging averages is not the average, and 37% of a column of them
-    means nothing. A financial reader spots it immediately."""
     engine = FakeEngine(rows={"Region": rows_for("Region", REGIONS)})
     facts = analyse_chart(engine, chart(measures=("Avg([SUM])",)))["facts"]
 
@@ -122,9 +100,6 @@ def test_count_and_sum_are_both_additive():
 
 
 def test_count_distinct_is_not_additive():
-    """A client with deposits in two regions is counted once per region, so
-    regional Count(DISTINCT ClientID)s sum past the true client total and
-    every share of that sum is overstated."""
     for expression in (
         "Count(DISTINCT [ClientID])",
         "count( distinct ClientID )",
@@ -134,8 +109,6 @@ def test_count_distinct_is_not_additive():
 
 
 def test_negative_categories_flag_their_shares():
-    """80 next to -20 makes the top share 133.3% - arithmetic-true and
-    reader-false, so the share never travels without the flag."""
     mixed = [("Almaty", 80.0), ("Astana", -20.0)]
     engine = FakeEngine(rows={"Region": rows_for("Region", mixed)})
     facts = analyse_chart(engine, chart())["facts"]
@@ -149,8 +122,6 @@ def test_all_positive_categories_carry_no_negative_flag():
     engine = FakeEngine(rows={"Region": rows_for("Region", REGIONS)})
     assert "negative_categories" not in analyse_chart(engine, chart())["facts"]
 
-
-# -- time ---------------------------------------------------------------
 
 MONTHS = [("2026-01", 100.0), ("2026-02", 120.0), ("2026-03", 90.0), ("2026-04", 150.0)]
 
@@ -180,7 +151,6 @@ def test_trend_measures_first_to_last_and_the_latest_step():
     assert trend["direction"] == "up"
     assert trend["peak"]["label"] == "2026-04"
     assert trend["trough"]["label"] == "2026-03"
-    # The step into the newest period is invisible in a start-to-end change.
     assert trend["latest_step"] == {
         "from": "2026-03", "to": "2026-04", "change": 60.0, "change_pct": 66.7,
     }
@@ -197,7 +167,6 @@ def test_a_falling_series_reads_as_down():
 
 
 def test_no_concentration_on_a_date_axis():
-    """"The top 3 of 6 months hold 50%" is not a finding about a deposit book."""
     engine = FakeEngine(rows={"Report Date": rows_for("Report Date", MONTHS)})
     facts = analyse_chart(engine, chart(dimensions=("Report Date",)))["facts"]
 
@@ -213,14 +182,10 @@ def test_a_date_is_recognised_by_qlik_tag_not_only_by_its_name():
 
 
 def test_a_number_called_period_is_still_a_date_by_name():
-    """The name heuristic is deliberately generous; being wrong here costs a
-    trend line on a categorical axis, not a wrong number."""
     assert insights._is_time_field("Reporting Period", [])
     assert not insights._is_time_field("Region", [])
     assert not insights._is_time_field("Currency", ["$ascii"])
 
-
-# -- charts that cannot be summarised -----------------------------------
 
 def test_a_kpi_reports_its_single_value():
     engine = FakeEngine(rows={None: [{"value": 207.5}]})
@@ -268,8 +233,6 @@ def test_truncation_is_reported_rather_than_hidden():
     assert facts["truncated"] == {"read": 4, "of": 900}
 
 
-# -- picking the sheet --------------------------------------------------
-
 def test_a_named_sheet_is_matched_on_a_fragment():
     engine = FakeEngine(
         charts=[chart(sheet="Deposits Overview"), chart(sheet="Other", id="c2")],
@@ -295,8 +258,6 @@ def test_no_sheet_named_means_the_one_built_last():
 
 
 def test_a_trailing_unplaced_chart_does_not_pick_the_alphabetically_last_sheet():
-    """The fallback used sorted()[-1], presenting whichever sheet sorted last
-    as 'the one just built' whenever the newest object had no sheet."""
     engine = FakeEngine(
         charts=[
             chart(sheet="Zzz Archive", id="c1"),
@@ -319,7 +280,6 @@ def test_specific_chart_ids_win_over_the_sheet():
 
 
 def test_chart_ids_still_name_the_sheet_they_live_on():
-    """summary['sheet']=None looked like a bug and got echoed to the reader."""
     engine = FakeEngine(
         charts=[chart(id="c1", sheet="Deposits"), chart(id="c2", sheet="Deposits")],
         rows={"Region": rows_for("Region", REGIONS)},
@@ -340,7 +300,6 @@ def test_an_empty_app_says_so_instead_of_raising():
 
 
 def test_charts_on_no_sheet_are_not_summarised_as_one():
-    """An object can exist in the app while being invisible in Qlik."""
     engine = FakeEngine(charts=[chart(sheet=None)])
     assert "error" in analyse_sheet(engine)
 
@@ -356,14 +315,10 @@ def test_field_metadata_failing_does_not_stop_the_reading():
     assert analyse_sheet(engine)["read"] == 1
 
 
-# -- putting the app's own spelling back --------------------------------
-
 LABELS = {"срочные и условные", "вклады до востребования", "г.Алматы", "Retail Banking"}
 
 
 def test_a_paraphrased_label_is_restored():
-    """A 26B model writing Uzbek prose about Russian categories mangles them,
-    and the reader cannot tell a renamed category from a wrong number."""
     text = 'Eng katta ulush "срочные и условно-срок" turiga tegishli.'
 
     assert insights.snap_labels(text, LABELS) == (
@@ -391,7 +346,6 @@ def test_a_correct_label_is_left_exactly_as_it_is():
 
 
 def test_a_genuinely_different_category_is_not_snapped():
-    """Sharing a word is not being the same label."""
     text = 'The "Corporate Banking" segment grew.'
     assert insights.snap_labels(text, LABELS) == text
 
@@ -424,8 +378,6 @@ def test_snapping_survives_a_label_that_is_a_regex_metacharacter():
     assert insights.snap_labels(text, labels) == 'The "Sum([SUM]) *special*" measure.'
 
 
-# -- shares on an ad-hoc query ------------------------------------------
-
 def query_result(rows, columns, total_rows=None):
     return {
         "columns": columns, "rows": [dict(r) for r in rows],
@@ -447,8 +399,6 @@ def test_query_rows_carry_their_share():
 
 
 def test_a_top_n_share_is_against_the_real_total_not_the_page():
-    """The trap: three rows summing to 140 out of a book of 200 are 70% of
-    the book, not 100% of itself."""
     class Engine(FakeEngine):
         def query(self, dimensions=None, measures=None, limit=50, sort_by_measure=True):
             assert not dimensions, "the grand total is read without a dimension"
@@ -466,7 +416,6 @@ def test_a_top_n_share_is_against_the_real_total_not_the_page():
 
 
 def test_no_share_when_the_real_total_cannot_be_read():
-    """Better no percentage than one against the wrong denominator."""
     class Engine(FakeEngine):
         def query(self, **kwargs):
             raise RuntimeError("engine busy")
@@ -482,8 +431,6 @@ def test_no_share_when_the_real_total_cannot_be_read():
 
 
 def test_negative_rows_carry_a_warning_beside_their_shares():
-    """A negative row shrinks the net total, so another row's share of it
-    passes 100% - true arithmetic the model must not quote unqualified."""
     result = insights.add_shares(
         FakeEngine(),
         query_result([{"R": "a", "m": 80.0}, {"R": "b", "m": -20.0}], ["R", "m"]),
@@ -506,7 +453,6 @@ def test_no_share_on_a_measure_that_does_not_add_up():
 
 
 def test_a_measure_only_query_is_left_alone():
-    """One aggregated number has no share to take."""
     result = insights.add_shares(
         FakeEngine(), query_result([{"m": 80.0}], ["m"]),
         dimensions=[], measures=["Sum([SUM])"],
@@ -532,11 +478,6 @@ def test_an_empty_result_is_returned_unchanged():
 
 
 class TestDistinctCountsThatDoNotAddUp:
-    """Count(DISTINCT x) counts a client once per region, so the regional
-    counts sum past the true total and every share against that sum is
-    overstated. DISTINCT does not have to come first: set analysis and
-    TOTAL sit in front of it, and those count no straighter."""
-
     @pytest.mark.parametrize("expression", [
         "Count(DISTINCT [Client])",
         "Count({<[Year]={'2026'}>} DISTINCT [Client])",
@@ -547,7 +488,6 @@ class TestDistinctCountsThatDoNotAddUp:
         assert insights._is_additive(expression) is False
 
     def test_a_field_called_distinct_something_still_counts_rows(self):
-        """DISTINCT is a keyword, not part of a bracketed field name."""
         assert insights._is_additive("Count([Distinct Clients])") is True
 
     def test_a_plain_count_still_adds_up(self):

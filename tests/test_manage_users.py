@@ -1,11 +1,3 @@
-"""The command line recovery tool.
-
-It exists for one failure with no other way out: five wrong passwords lock an
-account for fifteen minutes, and on an installation with one administrator
-that locks the only person who could unlock it - behind the login that is
-refusing them. So the tests that matter most here are the recovery ones.
-"""
-
 import pytest
 
 import manage_users
@@ -29,10 +21,6 @@ def member():
     return users.create("jsmith", "jsmith-password-1", display_name="J Smith")
 
 
-# ----------------------------------------------------------------------
-# The reason it exists
-# ----------------------------------------------------------------------
-
 class TestRecoveringALockedOutAdministrator:
 
     def test_it_unlocks_the_only_administrator(self, boss, monkeypatch, capsys):
@@ -54,13 +42,11 @@ class TestRecoveringALockedOutAdministrator:
         assert users.authenticate("boss", "boss-password-1") is None
 
     def test_a_reset_signs_them_out_everywhere(self, boss):
-        """The sessions open now were opened with the old password."""
         token = users.start_session(boss["id"])
         run("password", "boss", "--password", "a-brand-new-password")
         assert users.session_user(token)[0] is None
 
     def test_it_can_make_a_second_administrator(self, boss):
-        """The other way out of the same corner."""
         assert run("create", "deputy", "--admin",
                    "--password", "deputy-password-1") == 0
         assert users.by_username("deputy")["is_admin"] is True
@@ -70,16 +56,10 @@ class TestRecoveringALockedOutAdministrator:
         assert "not locked" in capsys.readouterr().out
 
     def test_it_works_with_no_server_running(self, boss):
-        """It talks to the database, not to the service - which is the whole
-        point, because the service is usually the thing that is wrong."""
-        import web_app  # noqa: F401  - imported, never started
+        import web_app
 
         assert run("list") == 0
 
-
-# ----------------------------------------------------------------------
-# Everyday use
-# ----------------------------------------------------------------------
 
 class TestListing:
 
@@ -105,7 +85,6 @@ class TestListing:
         assert "BANK\\jsmith" in capsys.readouterr().out
 
     def test_the_column_fits_the_header(self, capsys):
-        """Short usernames must not narrow the column below its own title."""
         users.create("ab", "a-good-password", role=users.ADMIN)
         run("list")
         lines = capsys.readouterr().out.splitlines()
@@ -126,8 +105,6 @@ class TestCreating:
         assert (made["qlik_directory"], made["qlik_user_id"]) == ("BANK", "jsmith")
 
     def test_it_warns_when_there_is_no_qlik_identity(self, boss, capsys):
-        """On Enterprise these accounts share one connection and one lock, so
-        a rollout that forgets this has a queue nobody can see."""
         run("create", "jsmith", "--password", "jsmith-password-1")
         assert "share the server's connection" in capsys.readouterr().out
 
@@ -160,8 +137,6 @@ class TestChanging:
         assert users.by_username("jsmith")["is_admin"] is False
 
     def test_the_last_administrator_is_protected(self, boss, capsys):
-        """The same guard the web page has - a script must not be able to do
-        what the page will not."""
         assert run("role", "boss", "user") == 1
         assert "only active administrator" in capsys.readouterr().err
 
@@ -220,9 +195,6 @@ class TestSessionsAndAudit:
 
 
 class TestEverythingIsRecorded:
-    """A command line that quietly bypassed the audit trail would be a way to
-    change accounts without leaving a mark."""
-
     @pytest.mark.parametrize("argv,action", [
         (("create", "newbie", "--password", "newbie-password-1"), "user.created"),
         (("password", "jsmith", "--password", "another-password"), "password.reset"),
@@ -242,12 +214,11 @@ class TestPasswordPrompting:
 
     def test_it_asks_rather_than_taking_it_from_the_command_line(
             self, boss, monkeypatch):
-        """A password in an argument ends up in the shell history."""
         asked = []
         monkeypatch.setattr(manage_users.getpass, "getpass",
                             lambda prompt: asked.append(prompt) or "typed-password-1")
         assert run("password", "boss") == 0
-        assert len(asked) == 2          # typed twice
+        assert len(asked) == 2
         assert users.authenticate("boss", "typed-password-1") is not None
 
     def test_a_mistyped_repeat_is_refused(self, boss, monkeypatch, capsys):

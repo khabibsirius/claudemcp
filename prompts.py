@@ -1,12 +1,3 @@
-"""Prompts for the dashboard-design step.
-
-The rules below are not style preferences - each one maps to a specific way
-Qlik fails quietly. Wrong field name, bracketed dimension, or an expression
-with SortBy/Aggr in it all produce a chart object that renders empty instead
-of raising. dashboard_builder re-checks all of it after the fact; the prompt
-is the cheap first line of defence.
-"""
-
 import json
 
 from chart_specs import CHART_TYPES
@@ -119,13 +110,6 @@ emit must be {{ and the last must be }}.
 
 
 def build_dashboard_prompt(fields, instruction=None):
-    """Build the user-turn prompt containing the app's field list.
-
-    instruction: optional free-text request from the user (e.g. "focus on
-    sales by region and show a trend over time") that steers what the model
-    designs. If omitted, the model uses its own judgement.
-    """
-
     field_summary = []
     for f in fields:
         entry = {
@@ -133,9 +117,6 @@ def build_dashboard_prompt(fields, instruction=None):
             "tags": f.get("tags", []),
             "tables": f.get("tables", []),
         }
-        # Only present once the field list has been profiled. Both are what
-        # let the model tell a 5-value category from a 65,000-value id, and
-        # what a vaguely named field actually holds.
         if f.get("cardinality") is not None:
             entry["cardinality"] = f["cardinality"]
         if f.get("samples"):

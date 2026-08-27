@@ -1,11 +1,3 @@
-"""Non-CSV files must be previewed and loaded as what they are.
-
-Every preview used CSV_FORMAT and every generated FROM clause said
-`(txt, ...)` whatever the file was - so an .xlsx or .qvd "preview" returned
-binary garbage as column names, and the script generated from it could not
-run. These pin the format to the extension at both ends.
-"""
-
 from chat_tools import build_load_script
 from data_prep import from_format_spec, generate_load_script
 from qlik_engine import file_format_for
@@ -37,7 +29,6 @@ class TestPreviewFormat:
         assert file_format_for("mystery.dat")["qType"] == "CSV"
 
     def test_every_field_the_engine_requires_is_present(self):
-        """The engine rejects a partial FileDataFormat outright."""
         csv_keys = set(file_format_for("a.csv"))
         assert set(file_format_for("a.xlsx")) == csv_keys
 
@@ -90,8 +81,6 @@ class TestGeneratedScriptUsesTheRightFormat:
 
 
 class FakeEngine:
-    """Just enough engine to preview one Excel file."""
-
     def preview_file(self, connection, path, sample_rows=5):
         return {
             "path": path,
@@ -113,8 +102,6 @@ class TestBuildLoadScriptCarriesTheSheetName:
         assert "table is [Sheet1]" in result["script"]
 
     def test_renaming_the_target_keeps_the_sheet_name(self):
-        """`table` renames the loaded table; the format spec still needs the
-        sheet's own name."""
         result = build_load_script(
             FakeEngine(),
             sources=[{"connection": "data", "path": "report.xlsx", "table": "Facts"}],

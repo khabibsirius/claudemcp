@@ -1,24 +1,13 @@
-# Qlik Engine API over a websocket
 websocket-client>=1.9,<2
 
-# Local LLM
 ollama>=0.6,<1
 
-# Settings from .env
 python-dotenv>=1.0,<2
 
-# Active Directory sign-in (LDAP_ENABLED). Pure Python, so it installs on
-# Windows without a compiler - unlike python-ldap, which needs OpenLDAP's C
-# libraries and is a bad afternoon on a locked-down server.
 ldap3>=2.9,<3
 
-# MCP server. [cli] adds `mcp dev` / `mcp run`.
 mcp[cli]>=2.0,<3
 
-# The web app (web_app.py). These arrive as transitive dependencies of
-# mcp[cli] in some installs, which is exactly why they are pinned here -
-# relying on that made `python web_app.py` die with ModuleNotFoundError in
-# any environment where it did not happen to be true.
 fastapi>=0.115,<1
 uvicorn>=0.30,<1
 pydantic>=2,<3

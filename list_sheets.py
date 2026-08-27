@@ -1,14 +1,3 @@
-"""List the sheets in an app, or the apps on this Qlik instance.
-
-    python list_sheets.py            # sheets in the app from .env
-    python list_sheets.py --app Sales
-    python list_sheets.py --apps     # what apps exist, and their ids
-
-Reads the SheetList the same way the Hub's sheet navigator does, so a sheet
-showing up here is one a user can actually find - not merely an object that
-exists in the app.
-"""
-
 import argparse
 import sys
 
@@ -17,7 +6,7 @@ from qlik_engine import QlikEngine, QlikEngineError
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description="List the sheets in an app, or the apps on this Qlik instance.")
     parser.add_argument("--app", default=APP_NAME, help=f"App to inspect (default: {APP_NAME!r})")
     parser.add_argument("--apps", action="store_true", help="List apps instead of sheets")
     return parser.parse_args(argv)

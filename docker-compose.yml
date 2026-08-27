@@ -1,12 +1,3 @@
-# Qlik AI, one container.
-#
-#   docker compose up -d
-#   docker compose logs -f
-#
-# Configuration comes from .env beside this file - the same .env the Windows
-# service uses, minus the paths, which are overridden below to point at the
-# container's volumes rather than at C:\ProgramData.
-
 services:
   qlikai:
     build: .
@@ -14,40 +5,24 @@ services:
     container_name: qlikai
     restart: unless-stopped
 
-    # Everything else - Qlik host, model endpoint, LDAP, admin password.
-    # Read at run time rather than baked into the image, which is why .env
-    # is in .dockerignore.
     env_file:
       - .env
 
     environment:
-      # The paths below are the container's, not the host's, so they are set
-      # here rather than in .env - a single .env can then serve both the
-      # service and the container without one breaking the other.
       USERS_DB: /data/users.db
       HISTORY_DIR: /data/history
       LOG_FILE: /var/log/qlikai/qlik-ai.log
       QLIK_CERT_DIR: /certs
 
-      # Sized for how many people are mid-question at once. See "Sizing" in
-      # DEPLOYMENT.md - this is the setting that decides it.
       WORKER_THREADS: ${WORKER_THREADS:-128}
 
     ports:
-      # Published to the host's LOOPBACK only, so nothing but a reverse proxy
-      # on the same machine can reach it. Change to "8000:8000" only if you
-      # have decided to serve the network directly, which means TLS is
-      # somebody else's problem and passwords are in the clear.
       - "127.0.0.1:8000:8000"
 
     volumes:
-      # The only things that cannot be rebuilt from the image: accounts, the
-      # audit trail, and every saved conversation. This is what to back up.
       - qlikai-data:/data
       - qlikai-logs:/var/log/qlikai
 
-      # The Qlik certificates, read-only. The container never needs to write
-      # them, and a read-only mount means a compromise cannot replace them.
       - ./certs:/certs:ro
 
     healthcheck:
@@ -58,26 +33,9 @@ services:
       start_period: 20s
       retries: 3
 
-    # The engine certificate is issued to the Qlik server's hostname, so the
-    # container has to resolve that name to reach it - connecting by IP fails
-    # TLS verification. On Docker Desktop with WSL2 this usually inherits the
-    # host's DNS and simply works; when it does not, this is the first thing
-    # to check. Uncomment and point at your own resolvers if needed.
-    # dns:
-    #   - 10.0.0.10
-    #   - 10.0.0.11
-
-    # Or, if DNS cannot be made to work, name the engine explicitly. Prefer
-    # fixing DNS: a hosts entry is a second place the truth lives.
-    # extra_hosts:
-    #   - "qlik-engine.bank.internal:10.0.0.50"
-
     logging:
       driver: json-file
       options:
-        # The application writes its own rotating log to /var/log/qlikai as
-        # well. This caps what Docker keeps of stdout, which is the startup
-        # banner and anything that escapes before logging is configured.
         max-size: "20m"
         max-file: "5"
 

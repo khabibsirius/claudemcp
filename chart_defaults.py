@@ -1,19 +1,3 @@
-"""Default properties for every Qlik chart type. GENERATED - do not edit.
-
-Produced by tools/generate_chart_specs.py from the nebula.js bundles
-shipped with Qlik Sense itself, so these are the exact property trees
-the Qlik client writes when you add a chart by hand. Guessing them from
-documentation produced charts that rendered blank without erroring.
-
-Each entry carries the property tree plus (min, max) dimensions and
-measures the chart accepts - a scatter plot needs two measures, and
-nothing short of the bundle would have told us that.
-
-To refresh:
-    node tools/extract_chart_specs.js > tools/chart_defaults.json
-    python tools/generate_chart_specs.py
-"""
-
 CHART_DEFAULTS = {'barchart': {'bundle': 'sn-bar-chart',
               'dimensions': (0, 2),
               'measures': (1, 15),

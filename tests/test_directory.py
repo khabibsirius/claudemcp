@@ -1,22 +1,10 @@
-"""Signing in with a Windows username and password.
-
-Users already type their AD credential to reach Qlik Sense. Asking them to
-remember a second password for this would be one more thing to forget and
-leak, and would mean somebody typing a Qlik identity for every account by
-hand before any of it worked.
-
-Everything here runs against ldap3's mock server, so it needs no domain
-controller - which is just as well, because the machine this was written on
-is in a workgroup.
-"""
-
 import pytest
 
 ldap3 = pytest.importorskip("ldap3")
 
-import auth  # noqa: E402
-import directory  # noqa: E402
-import users  # noqa: E402
+import auth
+import directory
+import users
 
 pytestmark = pytest.mark.live_auth
 
@@ -28,18 +16,6 @@ ADMIN_GROUP = f"cn=Qlik AI Admins,ou=Groups,{BASE}"
 
 @pytest.fixture
 def ad(monkeypatch):
-    """A fake Active Directory with two people in it.
-
-    ldap3's MOCK_SYNC strategy is a real LDAP server implementation over an
-    in-memory store: binds succeed or fail on the password actually held, and
-    searches run the filter properly - so the filter escaping and the bind
-    semantics are genuinely exercised rather than mocked away.
-
-    A connection is built fresh for each bind because the mock strategy
-    resets the directory when it attaches to a server, so entries are
-    re-added every time. Tests mutate the `people` dict this returns to
-    change what AD says about somebody.
-    """
     monkeypatch.setattr(directory, "LDAP_ENABLED", True)
     monkeypatch.setattr(directory, "LDAP_SERVER", "dc01.bank.internal")
     monkeypatch.setattr(directory, "LDAP_PORT", 636)
@@ -73,8 +49,6 @@ def ad(monkeypatch):
         },
     }
 
-    # The directory binds on a UPN or a down-level name; the mock binds on a
-    # DN, so map between them the way a real DC resolves it internally.
     names = {
         "jsmith@bank.internal": JSMITH_DN, "BANK\\jsmith": JSMITH_DN,
         "boss@bank.internal": BOSS_DN, "BANK\\boss": BOSS_DN,
@@ -94,10 +68,6 @@ def ad(monkeypatch):
     return people
 
 
-# ----------------------------------------------------------------------
-# The bind itself
-# ----------------------------------------------------------------------
-
 class TestCheckingAPassword:
 
     def test_the_right_password_returns_the_directory_entry(self, ad):
@@ -113,10 +83,6 @@ class TestCheckingAPassword:
 
     def test_an_empty_password_is_refused_before_it_reaches_the_network(
             self, ad, monkeypatch):
-        """A bind with a real name and an empty password is an
-        *unauthenticated bind* in the LDAP specification, and directories
-        answer success to it. Passing a blank password through would be a way
-        to sign in as anybody."""
         def explode(*args, **kwargs):
             pytest.fail("an empty password reached the directory")
 
@@ -136,8 +102,6 @@ class TestCheckingAPassword:
 class TestHowTheNameIsSent:
 
     def test_a_bare_name_becomes_a_user_principal_name(self, ad):
-        """Preferred because it works across a forest with several domains,
-        where the NetBIOS name does not."""
         assert directory.login_name("jsmith") == "jsmith@bank.internal"
 
     def test_the_down_level_form_is_used_without_a_upn_suffix(self, ad, monkeypatch):
@@ -155,8 +119,6 @@ class TestHowTheNameIsSent:
         assert directory.account_name(typed) == "jsmith"
 
     def test_a_name_with_filter_syntax_in_it_cannot_change_the_search(self, ad):
-        """A username containing a parenthesis or asterisk would otherwise
-        rewrite the filter rather than being searched for."""
         assert directory.authenticate("js*", "Windows-Password-1") is None
         assert directory.authenticate("jsmith)(cn=*", "Windows-Password-1") is None
 
@@ -164,14 +126,10 @@ class TestHowTheNameIsSent:
 class TestWhatIsTakenFromTheEntry:
 
     def test_the_qlik_identity_comes_from_the_directory(self, ad):
-        """The whole reason this is worth doing: sAMAccountName is what
-        Qlik's own AD connector uses as the user id, so the two systems name
-        the same person the same way without anybody typing it."""
         entry = directory.authenticate("jsmith", "Windows-Password-1")
         assert directory.qlik_identity(entry) == ("BANK", "jsmith")
 
     def test_the_qlik_directory_can_differ_from_the_domain(self, ad, monkeypatch):
-        """It is the name of the QMC's connector, not a fact about AD."""
         monkeypatch.setattr(directory, "LDAP_QLIK_DIRECTORY", "CORPORATE")
         entry = directory.authenticate("jsmith", "Windows-Password-1")
         assert directory.qlik_identity(entry)[0] == "CORPORATE"
@@ -195,8 +153,6 @@ class TestWhatIsTakenFromTheEntry:
 class TestWhenTheDirectoryIsTheProblem:
 
     def test_an_unreachable_server_raises_rather_than_denying(self, ad, monkeypatch):
-        """"Your password is wrong" when a domain controller is down sends
-        somebody to reset a password that was never the problem."""
         def unreachable(*args, **kwargs):
             raise directory.DirectoryError("connection refused")
 
@@ -221,26 +177,8 @@ class TestWhenTheDirectoryIsTheProblem:
         assert "NO TLS" in directory.summary()
 
 
-# ----------------------------------------------------------------------
-# Signing in through the app
-# ----------------------------------------------------------------------
-
 class TestConfigurationRefusesASilentlyBrokenSetup:
-    """The failure this guards does not look like a failure. Without a Qlik
-    user directory every account created from AD gets an empty identity,
-    which does not error - it drops all of them onto the server's shared
-    connection and the one global lock, so they queue behind each other.
-    Nothing on screen says why; it surfaces months later as "the assistant
-    is slow", for everybody at once."""
-
     def reload_config(self, monkeypatch, **settings):
-        """Re-import config with only these settings visible.
-
-        The error is matched on its message rather than its class: reloading
-        a module rebuilds every class it defines, so the ConfigError raised
-        during the reload is a different object from the one imported before
-        it, and `pytest.raises(config.ConfigError)` would not catch it.
-        """
         import importlib
 
         import config
@@ -255,13 +193,6 @@ class TestConfigurationRefusesASilentlyBrokenSetup:
 
     @pytest.fixture(autouse=True)
     def restore_config(self):
-        """Put the real settings back, or every later test sees these.
-
-        The environment is cleared here rather than left to monkeypatch,
-        because fixture teardown runs before monkeypatch undoes its own
-        changes - so reloading first would re-read the very settings the
-        test was proving are invalid, and fail during teardown.
-        """
         yield
         import importlib
         import os
@@ -288,8 +219,6 @@ class TestConfigurationRefusesASilentlyBrokenSetup:
         assert reloaded.LDAP_QLIK_DIRECTORY == "BANK"
 
     def test_naming_it_explicitly_wins(self, monkeypatch):
-        """It is the name of the QMC's connector, which need not be the
-        domain."""
         reloaded = self.reload_config(
             monkeypatch, LDAP_ENABLED="true", LDAP_SERVER="dc01",
             LDAP_BASE_DN="DC=x", LDAP_WINDOWS_DOMAIN="BANK",
@@ -303,10 +232,6 @@ class TestConfigurationRefusesASilentlyBrokenSetup:
 
 
 class TestAccountsCreateThemselves:
-    """The point of the arrangement: nobody types a Qlik user directory for
-    three hundred people, and the value is right because it came from the
-    same place Qlik reads."""
-
     def test_a_first_sign_in_makes_the_account(self, ad):
         assert users.by_username("jsmith") is None
 
@@ -320,8 +245,6 @@ class TestAccountsCreateThemselves:
         assert user["from_directory"] is True
 
     def test_it_has_no_usable_local_password(self, ad):
-        """A local password on a directory account would be a second way in
-        that AD does not know about, and would not close when they leave."""
         auth.sign_in("jsmith", "Windows-Password-1")
         assert users.authenticate("jsmith", "Windows-Password-1") is None
         assert users.authenticate("jsmith", "") is None
@@ -333,7 +256,6 @@ class TestAccountsCreateThemselves:
         assert users.count() == 1
 
     def test_directory_attributes_are_refreshed_every_time(self, ad):
-        """AD stays the authority rather than this database drifting."""
         auth.sign_in("jsmith", "Windows-Password-1")
         ad[JSMITH_DN]["displayName"] = "Jane Smith-Jones"
 
@@ -342,7 +264,6 @@ class TestAccountsCreateThemselves:
 
     def test_the_admin_group_promotes_and_demotes(self, ad, monkeypatch):
         monkeypatch.setattr(directory, "LDAP_ADMIN_GROUP", ADMIN_GROUP)
-        # Somebody has to remain an administrator for a demotion to be legal.
         users.create("keeper", "keeper-password-1", role=users.ADMIN)
 
         boss, _ = auth.sign_in("boss", "Boss-Password-1")
@@ -353,8 +274,6 @@ class TestAccountsCreateThemselves:
         assert boss["is_admin"] is False
 
     def test_being_disabled_here_survives_a_successful_bind(self, ad):
-        """Disabling somebody is a local decision about this tool, and a
-        working Windows password must not quietly undo it."""
         users.create("keeper", "keeper-password-1", role=users.ADMIN)
         auth.sign_in("jsmith", "Windows-Password-1")
         users.update(users.by_username("jsmith")["id"], active=False)
@@ -367,7 +286,6 @@ class TestAccountsCreateThemselves:
 class TestLocalAndDirectoryAccountsCoexist:
 
     def test_a_local_administrator_still_works(self, ad):
-        """Break-glass: the account that gets in when AD is unreachable."""
         users.create("breakglass", "local-password-1", role=users.ADMIN)
         user, reason = auth.sign_in("breakglass", "local-password-1")
         assert reason is None
@@ -394,8 +312,6 @@ class TestLocalAndDirectoryAccountsCoexist:
 
     def test_a_directory_account_is_refused_when_the_directory_is_off(
             self, ad, monkeypatch):
-        """There is no local password to fall back to, and inventing one
-        would be a way in that AD never authorised."""
         auth.sign_in("jsmith", "Windows-Password-1")
         monkeypatch.setattr(directory, "LDAP_ENABLED", False)
 
@@ -416,13 +332,9 @@ class TestLocalAndDirectoryAccountsCoexist:
 
 
 class TestTheLockoutProtectsTheWindowsAccount:
-    """The most important thing in this file. Our rate limit runs BEFORE the
-    bind, so somebody hammering this login form locks the account here rather
-    than locking the person's Windows account across the whole bank."""
-
     def test_failures_against_the_directory_are_counted(self, ad, monkeypatch):
         monkeypatch.setattr(users, "LOGIN_MAX_ATTEMPTS", 3)
-        auth.sign_in("jsmith", "Windows-Password-1")     # creates the account
+        auth.sign_in("jsmith", "Windows-Password-1")
 
         for _ in range(3):
             assert auth.sign_in("jsmith", "wrong")[1] == "credentials"
@@ -443,13 +355,6 @@ class TestTheLockoutProtectsTheWindowsAccount:
 
     def test_someone_who_has_never_signed_in_is_protected_too(self, ad,
                                                               monkeypatch):
-        """The case the ordering exists for, and the one it originally
-        missed. With directory sign-in an account creates itself on FIRST
-        sign-in, so everybody who has not used the product yet has no local
-        row - and a lockout counted against that row gave those people no
-        protection at all. Every guess reached the domain controller, which
-        is how an attacker walks a real employee's Windows account into AD's
-        own lockout through this login form."""
         monkeypatch.setattr(users, "LOGIN_MAX_ATTEMPTS", 3)
 
         reached = []
@@ -471,7 +376,6 @@ class TestTheLockoutProtectsTheWindowsAccount:
         assert users.locked("jsmith") is True
 
     def test_guessing_does_not_create_accounts(self, ad):
-        """Otherwise the login form is a way to fill the accounts table."""
         for i in range(5):
             auth.sign_in(f"nobody{i}", "guessing")
         assert users.count() == 0

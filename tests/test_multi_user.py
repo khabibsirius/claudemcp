@@ -1,11 +1,3 @@
-"""One session per person, rather than one for the whole server.
-
-Blocker B2 in readiness.md: session.py held a single module-level `_state` -
-one engine, one message list, one chat id. Two people using the assistant at
-once were in the *same* conversation: each saw the other's questions, and the
-second person's request landed in the middle of the first person's context.
-"""
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -19,12 +11,6 @@ pytestmark = pytest.mark.live_auth
 
 
 class FakeEngine:
-    """A stand-in that remembers which document it has open.
-
-    That is the part that matters here: the desktop connection is shared, so
-    "which app is open" is the thing two sessions can disagree about.
-    """
-
     mode = "desktop"
 
     def __init__(self, identity=None):
@@ -86,7 +72,6 @@ def two_people():
 
 @pytest.fixture
 def engines(monkeypatch):
-    """Every connection this test makes, in the order they were made."""
     made = []
 
     def build(*args, **kwargs):
@@ -98,10 +83,6 @@ def engines(monkeypatch):
     monkeypatch.setattr(session, "QlikEngine", build)
     return made
 
-
-# ----------------------------------------------------------------------
-# The conversation
-# ----------------------------------------------------------------------
 
 class TestConversationsAreSeparate:
 
@@ -171,10 +152,6 @@ class TestSettingsAreSeparate:
 
     def test_a_new_session_starts_from_the_server_s_model(self, two_people,
                                                           engines):
-        """Which model to use is the person's own setting, but a session
-        that begins with none reports the assistant as unavailable until
-        they have asked it something - so everybody's first look at the page
-        said Ollama was down while it was running perfectly well."""
         alice, _ = two_people
         session.system().state["model"] = "qwen3.6:35b"
 
@@ -202,10 +179,6 @@ class TestSettingsAreSeparate:
         assert session.for_user(bob).app_name() == "risk"
 
 
-# ----------------------------------------------------------------------
-# The Qlik connection
-# ----------------------------------------------------------------------
-
 class TestEnterpriseGivesEveryoneTheirOwnConnection:
 
     @pytest.fixture(autouse=True)
@@ -213,8 +186,6 @@ class TestEnterpriseGivesEveryoneTheirOwnConnection:
         monkeypatch.setattr(session, "per_user_engines", lambda: True)
 
     def test_each_session_connects_as_its_own_user(self, two_people, engines):
-        """The whole reason a user has a Qlik account: the engine applies
-        that user's own app permissions, and what they build is theirs."""
         alice, bob = two_people
         session.for_user(alice).open_app("sales")
         session.for_user(bob).open_app("sales")
@@ -227,14 +198,10 @@ class TestEnterpriseGivesEveryoneTheirOwnConnection:
                 is not session.for_user(bob).open_app("sales"))
 
     def test_they_do_not_wait_on_each_other(self, two_people, engines):
-        """Separate sockets mean separate locks, which is what lets two
-        people actually work at once."""
         alice, bob = two_people
         assert session.for_user(alice).lock is not session.for_user(bob).lock
 
     def test_a_user_with_no_qlik_identity_falls_back(self, engines):
-        """So the system is demonstrable before every account has been
-        matched to a Qlik one."""
         nobody = users.create("carol", "carol-password-1")
         sess = session.for_user(nobody)
         assert sess.impersonates is False
@@ -243,7 +210,6 @@ class TestEnterpriseGivesEveryoneTheirOwnConnection:
 
     def test_changing_someone_s_qlik_identity_drops_their_connection(
             self, two_people, engines):
-        """The socket was opened as who they used to be."""
         alice, _ = two_people
         first = session.for_user(alice)
         first.open_app("sales")
@@ -257,10 +223,6 @@ class TestEnterpriseGivesEveryoneTheirOwnConnection:
 
 
 class TestDesktopSharesOneConnection:
-    """Qlik Sense Desktop permits one session per app and has no identities
-    to impersonate, so a second socket does not give a second user their own
-    view - it fails to open the app at all."""
-
     def test_everyone_works_through_one_socket(self, two_people, engines):
         alice, bob = two_people
         session.for_user(alice).open_app("sales")
@@ -273,33 +235,28 @@ class TestDesktopSharesOneConnection:
 
     def test_the_document_is_re_opened_for_whoever_is_asking(self, two_people,
                                                              engines):
-        """The failure this prevents is silent: one person's question
-        answered against another person's data model, confidently."""
-        alice, bob = two_people
-        one, other = session.for_user(alice), session.for_user(bob)
-
-        one.open_app("sales")
-        other.open_app("risk")          # takes the shared socket to 'risk'
-
-        assert one.engine().app_name == "sales"
-        assert other.engine().app_name == "risk"
-
-    def test_the_displaced_user_is_not_told_their_app_closed(self, two_people,
-                                                             engines):
-        """They did not close anything. Somebody else switched app."""
         alice, bob = two_people
         one, other = session.for_user(alice), session.for_user(bob)
 
         one.open_app("sales")
         other.open_app("risk")
 
-        assert one.connected() is False       # the socket really did go
-        assert one.engine().app_name == "sales"   # and comes straight back
+        assert one.engine().app_name == "sales"
+        assert other.engine().app_name == "risk"
+
+    def test_the_displaced_user_is_not_told_their_app_closed(self, two_people,
+                                                             engines):
+        alice, bob = two_people
+        one, other = session.for_user(alice), session.for_user(bob)
+
+        one.open_app("sales")
+        other.open_app("risk")
+
+        assert one.connected() is False
+        assert one.engine().app_name == "sales"
         assert one.app_name() == "sales"
 
     def test_nothing_open_is_still_an_error(self, two_people, engines):
-        """A session that never opened anything is a different thing from one
-        whose socket was replaced, and must still say so."""
         from qlik_engine import QlikNotConnectedError
 
         alice, _ = two_people
@@ -307,15 +264,10 @@ class TestDesktopSharesOneConnection:
             session.for_user(alice).engine()
 
 
-# ----------------------------------------------------------------------
-# Over HTTP
-# ----------------------------------------------------------------------
-
 class TestOverHttp:
 
     @pytest.fixture
     def clients(self, two_people, engines):
-        """Two browsers, each signed in as a different person."""
         made = {}
         for username, password in (("alice", "alice-password-1"),
                                    ("bob", "bob-password-1")):
@@ -327,25 +279,12 @@ class TestOverHttp:
 
     def test_a_first_visit_opens_the_app_rather_than_reporting_none(
             self, clients, engines):
-        """Starting the server opens the configured app for the system
-        session, which is nobody's. Without this, everyone's first request
-        after signing in said no app was open - which reads as the product
-        being broken rather than as a step they had missed."""
         state = clients["alice"].get("/api/state")
         assert state.status_code == 200
         assert state.json()["app"] == "data"
 
     def test_a_session_that_lost_its_engine_gets_its_own_app_back(
             self, clients, two_people, engines):
-        """A lost connection is rebuilt on the app the person was using.
-
-        The distinction this guards has not changed, only the outcome:
-        auto-opening the *configured* app is for somebody who has never
-        opened anything, and a session that HAS an app must never be
-        silently moved to a different one. It is now re-opened on its own
-        app instead of being told, on every request until a restart, that
-        nothing is open.
-        """
         alice, _ = two_people
         clients["alice"].get("/api/state")
         sess = session.for_user(alice)
@@ -360,7 +299,6 @@ class TestOverHttp:
 
     def test_a_session_that_never_opened_anything_is_told_so(
             self, clients, two_people, engines):
-        """The other half of the same distinction, still true."""
         alice, _ = two_people
         sess = session.for_user(alice)
         sess.state["engine"] = None
@@ -386,8 +324,6 @@ class TestOverHttp:
 
     def test_a_guessed_chat_id_does_not_reach_another_person_s_conversation(
             self, clients, two_people, engines):
-        """The id is in the other user's URL bar, so it is guessable by the
-        simple method of being told it."""
         alice, _ = two_people
         sess = session.for_user(alice)
         sess.reset_chat()
@@ -410,8 +346,6 @@ class TestOverHttp:
         assert history.load(chat_id, history.owner_key(alice["id"])) is not None
 
     def test_the_reload_switch_is_not_shared(self, clients, engines):
-        """It used to be one module-level flag, so one person allowing the
-        assistant to reload allowed it for everybody on the server."""
         alice = clients["alice"].post("/api/select", json={"allow_reload": False})
         bob = clients["bob"].post("/api/select", json={})
 
@@ -423,14 +357,7 @@ class TestOverHttp:
         assert clients["bob"].post("/api/select", json={}).json()["language"] == ""
 
 
-# ----------------------------------------------------------------------
-# The command line
-# ----------------------------------------------------------------------
-
 class TestTheSystemSession:
-    """chat.py, mcp_server.py and check_connection.py are single-user by
-    nature and go on calling the module-level functions."""
-
     def test_the_module_functions_are_the_system_session(self, engines):
         assert session._state is session.system().state
 

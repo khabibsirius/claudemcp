@@ -1,10 +1,3 @@
-"""Generating LOAD scripts from previewed files.
-
-Cleaning is expressed inside the load script rather than applied afterwards,
-because the script is the only place a fix applies to every row once and
-stays applied on the next reload.
-"""
-
 import pytest
 
 from data_prep import generate_load_script, qlik_quote, split_tabs
@@ -50,8 +43,6 @@ class TestSingleSource:
         assert "[lib://dataset/sales.csv]" in script_for([SALES])
 
     def test_a_bracket_in_the_path_is_escaped(self):
-        """An unescaped ] closed the FROM clause mid-path and the statement
-        failed to parse."""
         source = dict(SALES, path="sales]v2.csv")
         assert "FROM [lib://dataset/sales]]v2.csv]" in script_for([source])
 
@@ -71,7 +62,6 @@ class TestCleaning:
         assert "Trim(" not in script_for([SALES], trim_text=False)
 
     def test_null_tokens_become_real_nulls(self):
-        """Otherwise Qlik charts 'N/A' as though it were a category."""
         script = script_for([SALES], trim_text=False, null_tokens=["N/A"])
         assert "If([Region] = 'N/A', Null(), [Region]) as [Region]" in script
 
@@ -80,7 +70,6 @@ class TestCleaning:
         assert "'N/A'" in script and "'-'" in script
 
     def test_a_null_token_with_an_apostrophe_is_escaped(self):
-        """A raw n'a ended the Qlik literal early and broke the script."""
         script = script_for([SALES], trim_text=False, null_tokens=["n'a"])
         assert "'n''a'" in script
         assert "'n'a'" not in script
@@ -104,10 +93,6 @@ class TestCleaning:
 
 
 class TestNumericColumnsAreNotTrimmed:
-    """Trim() returns text. Trimming a numeric column silently turns it into
-    strings, the field loses its $numeric tag, and every Sum() built on it
-    stops working - so numbers are left alone."""
-
     TYPED = {
         "connection": "dataset", "path": "sales.csv", "table": "Sales",
         "columns": ["Region", "Amount", "Quantity"],
@@ -132,7 +117,6 @@ class TestNumericColumnsAreNotTrimmed:
         assert "Trim([Amount])" not in script_for([self.TYPED])
 
     def test_null_token_wrapping_preserves_a_numeric_column(self):
-        """Both branches return the value or null, so the type survives."""
         script = script_for([self.TYPED], null_tokens=["N/A"])
         assert "If([Amount] = 'N/A', Null(), [Amount]) as [Amount]" in script
 
@@ -141,7 +125,6 @@ class TestNumericColumnsAreNotTrimmed:
         assert any("numeric column" in n for n in notes)
 
     def test_without_samples_everything_is_treated_as_text(self):
-        """No evidence means fall back to the safe, reversible behaviour."""
         source = dict(self.TYPED)
         source.pop("sample_rows")
         assert "Trim([Amount])" in script_for([source])
@@ -166,8 +149,6 @@ class TestNumericColumnsAreNotTrimmed:
 
     @pytest.mark.parametrize("value", ["nan", "inf", "-Infinity", "1_000"])
     def test_pythonisms_qlik_reads_as_text_are_treated_as_text(self, value):
-        """float() accepts these but Qlik does not, so the column is really
-        text and skipping Trim() would leave it uncleaned."""
         source = dict(self.TYPED)
         source["columns"] = ["Amount"]
         source["sample_rows"] = [{"Amount": "1.5"}, {"Amount": value}]
@@ -175,8 +156,6 @@ class TestNumericColumnsAreNotTrimmed:
 
 
 class TestConcatenate:
-    """'Merge these files' when they share a shape."""
-
     def test_first_source_declares_the_table(self):
         script = script_for([SALES, RETURNS], mode="concatenate")
         assert "[Sales]:" in script
@@ -186,8 +165,6 @@ class TestConcatenate:
         assert "CONCATENATE ([Sales])" in script
 
     def test_names_the_concatenate_target_explicitly(self):
-        """A bare CONCATENATE attaches to whatever loaded last, which breaks
-        as soon as the script has more than one statement."""
         script = script_for([SALES, RETURNS], mode="concatenate")
         assert "CONCATENATE\n" not in script
 
@@ -197,8 +174,6 @@ class TestConcatenate:
         assert "CONCATENATE ([AllOrders])" in script
 
     def test_a_nameless_first_source_gets_a_real_default_not_none(self):
-        """A first source without 'table' produced a table literally named
-        None, and CONCATENATE ([None]) with it."""
         nameless = {k: v for k, v in SALES.items() if k != "table"}
         script = script_for([nameless, RETURNS], mode="concatenate")
         assert "[None]" not in script
@@ -214,7 +189,6 @@ class TestConcatenate:
         assert any("share column names" in n for n in notes)
 
     def test_sources_can_span_connections(self):
-        """'Load my dataset folder and my Downloads folder and merge them.'"""
         script = script_for([SALES, DOWNLOADS], mode="concatenate")
         assert "[lib://dataset/sales.csv]" in script
         assert "[lib://downloads/extra.csv]" in script
@@ -242,15 +216,11 @@ class TestValidation:
             generate_load_script([SALES], mode="merge")
 
     def test_no_sources_is_an_error_not_a_silent_empty_script(self):
-        """An empty script written into a tab looks like success while
-        loading nothing at all."""
         with pytest.raises(ValueError, match="sources"):
             generate_load_script([])
 
 
 class TestScriptIsUsableAsATab:
-    """Generated script has to survive being placed in a load-editor tab."""
-
     def test_round_trips_through_tab_handling(self):
         from data_prep import get_tab, set_tab
 

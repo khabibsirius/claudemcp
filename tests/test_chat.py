@@ -1,5 +1,3 @@
-"""The chatbot's tool layer and agent loop, with a scripted model."""
-
 import json
 
 import pytest
@@ -25,7 +23,6 @@ class TestToolRegistry:
             assert name in parameters["properties"], f"required {name} is not declared"
 
     def test_reloading_is_marked_destructive(self):
-        """It replaces every row in the app, so it needs confirmation."""
         assert "reload_data" in DESTRUCTIVE
 
     def test_read_only_actions_are_not_gated(self):
@@ -83,8 +80,6 @@ class TestActions:
 
 
 class ScriptedClient:
-    """Stands in for ollama.Client, replaying a fixed list of replies."""
-
     def __init__(self, replies):
         self._replies = list(replies)
         self.requests = []
@@ -163,7 +158,6 @@ class TestAgentLoop:
         assert seen["limit"] == 5
 
     def test_stops_after_the_step_limit(self, monkeypatch):
-        """A model looping on a failing call must not run forever."""
         monkeypatch.setitem(FUNCTIONS, "query", lambda engine, **kw: {"ok": True})
         client = ScriptedClient([
             {"content": "", "tool_calls": [tool_call("query", {})]}
@@ -213,8 +207,6 @@ class TestDestructiveConfirmation:
 
 
 class TestCallDescription:
-    """What the user sees while the assistant works."""
-
     def test_summarises_arguments(self):
         assert "Market" in chat.describe("query", {"dimensions": ["Market"]})
 
@@ -236,8 +228,6 @@ class TestCallDescription:
 
 
 class TestOutputIsAsciiSafe:
-    """The Windows console's default code page mangles non-ASCII."""
-
     def test_banner_is_ascii(self):
         chat.BANNER.encode("ascii")
 
@@ -246,10 +236,6 @@ class TestOutputIsAsciiSafe:
 
 
 class TestMalformedArguments:
-    """A tool-call arguments string that was not JSON used to become {}, and
-    the tool ran with every default - write_script wrote an empty tab over
-    the script the model had just composed."""
-
     def test_the_tool_is_refused_not_run_with_defaults(self, monkeypatch):
         ran = []
         monkeypatch.setitem(
@@ -268,10 +254,6 @@ class TestMalformedArguments:
 
 
 class TestToolResultMessages:
-    """A result with no tool_name left the model matching results to calls
-    by position, and a bare slice at the size cap cut mid-string, leaving
-    broken JSON with no sign that anything was missing."""
-
     def turn(self, monkeypatch, result):
         monkeypatch.setitem(FUNCTIONS, "query", lambda engine, **kw: result)
         client = ScriptedClient([
@@ -298,10 +280,6 @@ class TestToolResultMessages:
 
 
 class TestHistoryBudgetSeesToolCalls:
-    """trim_history counted only content, so an assistant message carrying a
-    whole load script inside tool_calls weighed nothing - the budget
-    undercounted and Ollama's silent front-truncation came back."""
-
     def test_tool_call_payloads_count_toward_the_budget(self):
         script_call = {
             "function": {"name": "write_script", "arguments": {"content": "x" * 50_000}}
@@ -320,9 +298,6 @@ class TestHistoryBudgetSeesToolCalls:
         )
 
     def test_the_fallback_never_strands_a_tool_result(self):
-        # No user message to cut at, and over budget: the old rest[-2:]
-        # opened on the tool result with no assistant tool_calls before it,
-        # which the model rejects as malformed.
         messages = [
             {"role": "assistant", "content": "",
              "tool_calls": [{"function": {"name": "query", "arguments": {}}}]},
@@ -334,10 +309,6 @@ class TestHistoryBudgetSeesToolCalls:
 
 
 class TestScriptOverwriteConfirmation:
-    """write_script mode='replace_all' throws away every hand-written tab,
-    but only reload_data was gated - a user who would have declined lost
-    the whole script without ever being asked."""
-
     def test_replace_all_is_skipped_when_declined(self, monkeypatch):
         monkeypatch.setattr(chat, "confirm", lambda question, action=None: False)
         engine = FakeEngine()
@@ -376,15 +347,6 @@ class TestScriptOverwriteConfirmation:
 
 
 class TestToolCallsSurviveSaving:
-    """A chat reopened from history crashed on the next question.
-
-    history.save writes messages with json.dump(default=str), which
-    flattens the typed tool-call objects the ollama client returns into
-    their repr strings - and a reopened chat sent those strings back to
-    the model, whose message validation rejects them. The loop stores
-    plain dicts instead, so a conversation survives the round-trip.
-    """
-
     def test_typed_tool_calls_are_stored_as_plain_dicts(self):
         from ollama._types import Message
 
@@ -403,15 +365,10 @@ class TestToolCallsSurviveSaving:
         for message in recorded:
             for call in message["tool_calls"]:
                 assert isinstance(call, dict)
-        # The whole conversation survives the save round-trip unchanged.
         assert json.loads(json.dumps(messages, default=str)) == messages
 
 
 class TestDeleteSheetNeedsPermission:
-    """It takes the charts with it and cannot be undone, so it is gated the
-    same way a reload is - and the model claimed to have done it long before
-    it could, which is what the tool exists to stop."""
-
     class Sheets:
         def __init__(self):
             self.deleted = []
@@ -449,17 +406,12 @@ class TestDeleteSheetNeedsPermission:
         assert result["charts"] == 3
 
     def test_the_schema_says_it_cannot_be_undone(self):
-        """A model that thinks this is reversible will use it to tidy up."""
         described = next(t["function"]["description"] for t in chat_tools.TOOLS
                          if t["function"]["name"] == "delete_sheet")
         assert "not undoable" in described
 
 
 class TestBuildDashboardSaysItMakesANewSheet:
-    """Asked for twenty charts on one sheet, the model called this twenty
-    times and made twenty sheets - the description never said each call is
-    its own sheet."""
-
     def test_the_schema_says_each_call_is_a_new_sheet(self):
         described = next(t["function"]["description"] for t in chat_tools.TOOLS
                          if t["function"]["name"] == "build_dashboard")

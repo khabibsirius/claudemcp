@@ -1,5 +1,3 @@
-"""Parsing what a small local model actually returns when asked for JSON."""
-
 import json
 
 import pytest
@@ -25,8 +23,6 @@ class TestStripCodeFences:
         assert strip_code_fences('{"a": 1}') == '{"a": 1}'
 
     def test_does_not_corrupt_backticks_inside_values(self):
-        """A line-anchored regex also matched fences inside string values and
-        silently mangled otherwise-valid JSON."""
         payload = '{"title": "Sales ```highlight``` report"}'
         assert json.loads(strip_code_fences(payload))["title"] == "Sales ```highlight``` report"
 
@@ -72,8 +68,6 @@ class TestParseJsonReply:
 
 
 class ScriptedClient(OllamaClient):
-    """OllamaClient with the network call replaced by a fixed script."""
-
     def __init__(self, replies):
         self.model = "test-model"
         self.host = ""
@@ -89,10 +83,6 @@ class ScriptedClient(OllamaClient):
 
 
 class TestAskJsonRetries:
-    """The retry used to start a brand new chat containing only 'that wasn't
-    valid JSON' - no field list, no previous reply. The model had nothing to
-    correct, so a retry could only succeed by luck."""
-
     def test_succeeds_first_time(self):
         client = ScriptedClient(['{"dashboard_title": "Sales"}'])
         assert client.ask_json("design it")["dashboard_title"] == "Sales"

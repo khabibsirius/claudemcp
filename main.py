@@ -1,12 +1,3 @@
-"""Build an AI-designed dashboard end-to-end, from the command line.
-
-    python main.py
-    python main.py --app Sales --instruction "3 charts, focus on region"
-
-The MCP server exposes the same flow as `qlik_build_sheet`; this is
-the version you can run without an MCP client attached.
-"""
-
 import argparse
 import logging
 import sys
@@ -18,7 +9,7 @@ from qlik_engine import QlikEngineError
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description="Build an AI-designed dashboard end-to-end, from the command line.")
     parser.add_argument(
         "--app", default=APP_NAME,
         help=f"App to build in, by title, filename or id (default: {APP_NAME!r})",

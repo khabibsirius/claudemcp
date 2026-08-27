@@ -1,24 +1,3 @@
-"""Accounts from the command line, for when the browser is not an option.
-
-    python manage_users.py list
-    python manage_users.py unlock admin
-    python manage_users.py password admin
-    python manage_users.py create jsmith --name "J Smith" --qlik-user jsmith
-
-This exists because of a specific failure with no other way out: five wrong
-passwords lock an account for fifteen minutes, and on an installation with
-one administrator that locks the only person who could unlock it. The admin
-page is behind the login that is refusing them. Without this the recovery
-procedure was hand-editing SQLite, which is not a procedure to hand anyone
-running a bank's server at four in the afternoon.
-
-It talks to the database directly rather than to the running server, so it
-works whether or not the service is up. Changes take effect immediately
-either way: every request re-reads the account, so disabling somebody or
-resetting their password ends their sessions on the next request rather than
-whenever the process next restarts.
-"""
-
 import argparse
 import getpass
 import sys
@@ -33,7 +12,6 @@ def _fail(message):
 
 
 def _find(username):
-    """A user, or None with the reason already printed."""
     user = users.by_username(username)
     if user is None:
         _fail(f"no user called {username!r} - `manage_users.py list` shows them all")
@@ -41,11 +19,6 @@ def _find(username):
 
 
 def _ask_password(given, who):
-    """A password from the arguments, or typed twice without echoing.
-
-    Not echoed and not in the shell history, because a password in
-    `.bash_history` or a Windows console buffer is a password on disk.
-    """
     if given:
         return given
     first = getpass.getpass(f"New password for {who}: ")
@@ -54,17 +27,12 @@ def _ask_password(given, who):
     return first
 
 
-# ----------------------------------------------------------------------
-
-
 def cmd_list(args):
     people = users.listing()
     if not people:
         print("No accounts yet. The server creates the first administrator on startup.")
         return 0
 
-    # The header is eight characters, so a table of short usernames must not
-    # narrow the column below it.
     width = max([len("USERNAME")] + [len(u["username"]) for u in people])
     print(f"{'USERNAME'.ljust(width)}  ROLE   SIGN-IN  STATUS      "
           f"QLIK IDENTITY        LAST SEEN")
@@ -99,8 +67,6 @@ def cmd_create(args):
                                         "role": user["role"], "by": "command line"})
     print(f"Created {user['username']} ({user['role']}).")
     if not (user["qlik_directory"] and user["qlik_user_id"]):
-        # Worth saying: on Enterprise these people share one connection and
-        # one lock, so a rollout that forgets this has a queue nobody can see.
         print("  note: no Qlik identity set, so on Enterprise this account "
               "will share the server's connection rather than having its own.")
     return 0
@@ -121,7 +87,6 @@ def cmd_password(args):
     except (users.UserError, ValueError) as e:
         return _fail(str(e))
 
-    # Everywhere they are signed in now was signed in with the old password.
     users.end_sessions(user["id"])
     users.audit("password.reset", detail={"username": user["username"],
                                           "by": "command line"})
@@ -263,7 +228,6 @@ def cmd_audit(args):
 
 
 def cmd_prune(args):
-    """Apply the retention policy now, or say what it would remove."""
     import history
     from config import AUDIT_RETENTION_DAYS, HISTORY_RETENTION_DAYS
 
@@ -304,13 +268,10 @@ def cmd_where(args):
     return 0
 
 
-# ----------------------------------------------------------------------
-
-
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="manage_users.py",
-        description=__doc__.splitlines()[0],
+        description="Accounts from the command line, for when the browser is not an option.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Passwords are asked for without echoing unless --password is "
                "given; a password on the command line ends up in the shell "

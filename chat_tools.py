@@ -1,14 +1,3 @@
-"""The actions the chatbot can take, and their schemas for the local model.
-
-This is the whole capability surface: data connections, the load script,
-reloading, reading data, and building sheets. The MCP server deliberately
-exposes only a small part of this - the rest is meant to be reached by
-talking to the chatbot rather than by calling tools by hand.
-
-Each entry is (schema for the model, python function). Functions take the
-engine plus keyword arguments and return something JSON-serialisable.
-"""
-
 import json
 import logging
 from collections import Counter
@@ -44,15 +33,8 @@ from insights import add_shares, analyse_sheet, labels_in, snap_labels
 
 log = logging.getLogger(__name__)
 
-# Reloading rebuilds the data model; the chat loop asks before running it.
-# write_script is just as destructive in mode='replace_all' - it throws away
-# every hand-written tab in one move - so execute() gates that one mode
-# behind the same confirmation, by argument rather than by name here, where
-# it would block the harmless per-tab modes too.
 DESTRUCTIVE = {"reload_data", "delete_sheet"}
 
-# What the web editor lets the model touch. Reloading is deliberately absent:
-# there it is a button the person presses, exactly as in Qlik's own editor.
 LOAD_EDITOR_TOOLS = {
     "data_sources", "add_data_source", "read_script",
     "build_load_script", "write_script", "data_model", "query",
@@ -63,12 +45,7 @@ DATA_FILE_SUFFIXES = (
 )
 
 
-# ----------------------------------------------------------------------
-# Actions
-# ----------------------------------------------------------------------
-
 def open_app(engine, app=""):
-    """Open an app, or list them when no name is given."""
     if not app:
         return {"apps": [a["name"] for a in engine.list_apps()]}
 
@@ -83,7 +60,6 @@ def open_app(engine, app=""):
 
 
 def data_sources(engine, connection="", path=""):
-    """Connections, then folder contents, then a file's columns and rows."""
     if not connection:
         return {"connections": engine.list_connections()}
 
@@ -100,12 +76,10 @@ def data_sources(engine, connection="", path=""):
 
 
 def add_data_source(engine, name, folder_path):
-    """Register a folder so its files can be loaded."""
     return engine.create_connection(name, folder_path)
 
 
 def read_script(engine, tab=""):
-    """The load script, or one tab of it."""
     script = engine.get_script()
     names = tab_names(script)
 
@@ -119,7 +93,6 @@ def read_script(engine, tab=""):
 
 
 def write_script(engine, content="", tab=GENERATED_TAB, mode="replace_tab"):
-    """Write the load script. Syntax-checked; rolled back if it won't parse."""
     current = engine.get_script()
 
     if mode == "replace_tab":
@@ -140,20 +113,14 @@ def write_script(engine, content="", tab=GENERATED_TAB, mode="replace_tab"):
 def build_load_script(engine, sources, mode="separate", drop_fields=None,
                       trim_text=True, null_tokens=None, table_name="",
                       derived=None):
-    """Generate a clean LOAD script for one or more files."""
     previewed = []
     for source in sources or []:
-        # Sample rows are what stop a numeric column being wrapped in Trim()
-        # and silently turned into text.
         preview = engine.preview_file(source["connection"], source["path"], sample_rows=20)
         for table in preview["tables"]:
             previewed.append({
                 "connection": source["connection"],
                 "path": source["path"],
                 "table": source.get("table") or table["name"],
-                # The name INSIDE the file (an Excel sheet), which the FROM
-                # clause's format spec needs - distinct from "table", the
-                # name the load gives the result.
                 "file_table": table["name"],
                 "columns": table["columns"],
                 "sample_rows": table.get("sample_rows", []),
@@ -170,7 +137,6 @@ def build_load_script(engine, sources, mode="separate", drop_fields=None,
 
 
 def reload_data(engine):
-    """Run the load script, rebuilding the app's data."""
     result = engine.reload_data()
     if result.get("success"):
         result["tables"] = [
@@ -180,18 +146,10 @@ def reload_data(engine):
 
 
 def data_model(engine):
-    """Tables, fields, distinct counts, nulls, and quality problems."""
     return describe_data_model(engine)
 
 
 def query(engine, dimensions=None, measures=None, limit=20):
-    """Read actual values out of the data, with each row's share worked out.
-
-    The shares are added here rather than left to the model. Asked what
-    proportion something is, a model with a column of numbers in front of it
-    will do the division in its reply, and get the last digit wrong often
-    enough to matter to someone reading a deposit book.
-    """
     result = engine.query(
         dimensions=dimensions or [], measures=measures or [], limit=limit
     )
@@ -200,23 +158,11 @@ def query(engine, dimensions=None, measures=None, limit=20):
 
 
 def build_dashboard(engine, instruction, title="", model=None):
-    """Design a sheet from a plain-language brief and build it.
-
-    Deliberately not "here is a list of charts, build them": a small local
-    model asked to emit chart specs mid-conversation produces worse
-    dashboards than the dedicated design prompt does, which sees the whole
-    field list with distinct counts and real sample values. So the model
-    passes the brief through and the tuned pipeline does the designing.
-    """
     fields = engine.get_fields()
     if not fields:
         return {"error": "No data is loaded in this app. Load data first."}
 
     if model is None:
-        # The one model the whole session is using. Designing with a
-        # different one would pull a second model into memory alongside the
-        # one already loaded - which on a machine also running Qlik is the
-        # difference between working and swapping.
         import session
 
         model = session.ensure_model()
@@ -236,20 +182,6 @@ def build_dashboard(engine, instruction, title="", model=None):
 
 
 def _chart_problem(engine, chart_type, title, dimensions, measures):
-    """Why this chart would render blank, or None if it will draw.
-
-    build_dashboard validates every chart it designs; create_chart used to
-    validate nothing at all and report {"created": ...} regardless. A model
-    that asks for a pie chart and forgets the measure was told it had
-    succeeded, so it said so to the user, and the app grew a chart that
-    renders nothing. An empty chart nobody knows is empty is the worst
-    outcome available here - worse than a refusal, because it is discovered
-    weeks later by whoever is relying on it.
-
-    Everything checked here is checked BEFORE anything is created, and the
-    reason comes back as an error the model can act on, which is what lets
-    it correct itself inside the same turn.
-    """
     resolved = resolve_chart_type(chart_type)
     if resolved is None:
         return (
@@ -265,9 +197,6 @@ def _chart_problem(engine, chart_type, title, dimensions, measures):
 
     (min_dims, max_dims), (min_meas, max_meas) = chart_requirements(resolved)
 
-    # Qlik permits a bar chart with no dimension - it draws a single bar.
-    # Allowed is not the same as useful, so the classic types still require
-    # one, exactly as validate_visualization does for designed dashboards.
     if (min_dims or resolved in DIMENSIONAL_TYPES) and not dimensions:
         return (
             f"{resolved} needs a dimension to group by and none was given. "
@@ -298,16 +227,9 @@ def _chart_problem(engine, chart_type, title, dimensions, measures):
             f"{len(measures)}."
         )
 
-    # The shape checks above need nothing but the chart type, so they hold
-    # even when the engine cannot be consulted. The two below ask the app
-    # questions, and a chart is not worth refusing because the lookup itself
-    # failed - so they are best-effort, exactly as validate_visualization
-    # skips its field checks when it is given no field list.
-
-    # A misspelled dimension is the other way a chart comes out empty.
     try:
         known = {f["name"] for f in engine.get_fields()}
-    except Exception:  # no app open, or an engine that cannot be asked
+    except Exception:
         known = None
     if known:
         unknown = [d for d in dimensions if d not in known]
@@ -318,7 +240,6 @@ def _chart_problem(engine, chart_type, title, dimensions, measures):
                 f"data_model - the app has: {', '.join(sorted(known))}."
             )
 
-    # Qlik judges the expressions, so set analysis and Aggr stay available.
     for measure in measures:
         try:
             verdict = engine.check_expression(measure)
@@ -334,21 +255,9 @@ def _chart_problem(engine, chart_type, title, dimensions, measures):
 
 
 def _chart_preview(engine, chart_type, dimensions, measures):
-    """What the chart returns when queried. (preview, problem).
-
-    _chart_problem answers whether the chart is well-FORMED; this answers
-    whether it shows anything, which is a different question with a different
-    answer. A valid aggregation over a real field still totals nothing when
-    it is the wrong field, and Qlik renders that as an empty box rather than
-    an error.
-    """
     return probe_visualization(
         engine,
         {
-            # Every dimension and every measure, because this is the tool
-            # that builds the multi-dimension types and the cube the chart
-            # runs is the only one worth testing. A scatter plot whose second
-            # measure returns nothing draws axes and no points.
             "type": resolve_chart_type(chart_type),
             "dimensions": [d for d in (dimensions or []) if str(d).strip()],
             "measure_expressions": [
@@ -360,17 +269,6 @@ def _chart_preview(engine, chart_type, dimensions, measures):
 
 def _build_verified(engine, chart_type, title, dimensions, measures,
                     color=None, limit=None):
-    """Create the chart, read it back, and swap the type if it will not draw.
-
-    Returns (type_built, note): the type actually on the sheet and a sentence
-    about any substitution, or (None, reason) when nothing could be made to
-    draw and nothing was left behind.
-
-    Retrying the SAME type would be pointless. Everything this catches is a
-    property-tree fault - the cube in a branch the component does not read,
-    a tree the client has outgrown - and those reproduce exactly. So each
-    attempt is a different way of showing the same numbers.
-    """
     attempts = [resolve_chart_type(chart_type) or chart_type]
     attempts += [
         t for t in fallback_types(attempts[0], dimensions, measures)
@@ -395,7 +293,6 @@ def _build_verified(engine, chart_type, title, dimensions, measures,
             if isinstance(response, dict) else None
         )
         if not object_id:
-            # Nothing to verify against; the chart exists, so leave it.
             return candidate, None
 
         ok, detail = engine.chart_renders(object_id)
@@ -417,39 +314,20 @@ def _build_verified(engine, chart_type, title, dimensions, measures,
 
 def create_chart(engine, chart_type, title, dimensions=None, measures=None,
                  sheet_title=None, color=None, limit=None):
-    """Create one chart, with as many dimensions and measures as it needs.
-
-    build_dashboard designs a whole sheet but carries one dimension and one
-    measure per chart, so the types that need more - sankey, scatter, mekko,
-    a combo chart with two measures - cannot be expressed through it at all.
-    This is the way to build those.
-
-    Refuses anything that would render blank; see _chart_problem.
-    """
     problem = _chart_problem(engine, chart_type, title, dimensions, measures)
     if not problem:
-        # Well-formed is not the same as non-empty, so the app is asked what
-        # the chart actually returns before it is committed to a sheet.
         preview, problem = _chart_preview(engine, chart_type, dimensions, measures)
 
     if problem:
-        # Nothing is created. Named "error" so the model treats it as a
-        # correction to act on rather than a result to report.
         return {
             "error": f"Not created - it would render blank: {problem}",
             "created": False,
         }
 
-    # A sheet name that already exists means "put it there", not "make
-    # another one with the same name" - which is what it used to do, leaving
-    # duplicate sheets and the chart nowhere the person was looking.
     if sheet_title:
         try:
             engine.open_sheet(sheet_title)
         except QlikNotFoundError:
-            # Only when it genuinely isn't there. An ambiguous name must
-            # propagate: creating another sheet with the same title makes
-            # the ambiguity worse every time.
             engine.create_sheet(sheet_title)
     elif engine.sheet_handle is None:
         engine.create_sheet(title)
@@ -471,12 +349,8 @@ def create_chart(engine, chart_type, title, dimensions=None, measures=None,
 
     created = {"type": built, "title": title}
     if substituted:
-        # The model must not report the type it asked for: what is on the
-        # sheet is a different chart, and the user is looking at it.
         created["substituted"] = substituted
     if preview:
-        # What the chart came back with when it was queried, so the reply
-        # describes its contents rather than only its name.
         created["shows"] = preview
 
     return {
@@ -487,14 +361,6 @@ def create_chart(engine, chart_type, title, dimensions=None, measures=None,
 
 
 def list_charts(engine):
-    """Every chart in the app, with the id needed to change one.
-
-    Reports the sheets separately rather than leaving them implied by the
-    charts: a sheet with nothing on it owns no charts, so it is invisible in
-    that list, and "you have 3 sheets" is then wrong in a way nothing in the
-    conversation can correct. An empty sheet is also exactly the kind of
-    thing the person asking wants to be told about.
-    """
     charts = engine.list_charts()
     counts = Counter(chart.get("sheet") for chart in charts)
     return {
@@ -507,13 +373,11 @@ def list_charts(engine):
 
 
 def analyze_sheet(engine, sheet="", chart_ids=None):
-    """Read the numbers behind a sheet's charts and reduce them to facts."""
     return analyse_sheet(engine, sheet=sheet or None, chart_ids=chart_ids or None)
 
 
 def edit_chart(engine, chart_id, title=None, measure_expression=None,
                measure_label=None, dimension=None, color=None, limit=None):
-    """Change an existing chart in place."""
     result = engine.update_chart(
         chart_id, title=title, measure_expression=measure_expression,
         measure_label=measure_label, dimension=dimension,
@@ -526,24 +390,17 @@ def edit_chart(engine, chart_id, title=None, measure_expression=None,
 
 
 def check_expression(engine, expression):
-    """Ask Qlik whether an expression is valid, without building anything."""
     return engine.check_expression(expression)
 
 
 def delete_sheet(engine, sheet):
-    """Remove a sheet and every chart on it."""
     return engine.delete_sheet(sheet)
 
 
 def save(engine):
-    """Persist the app to disk."""
     engine.save()
     return {"saved": True}
 
-
-# ----------------------------------------------------------------------
-# Schemas handed to the model
-# ----------------------------------------------------------------------
 
 def _tool(name, description, properties=None, required=None):
     return {
@@ -798,20 +655,13 @@ assert {t["function"]["name"] for t in TOOLS} == set(FUNCTIONS), "tool list drif
 
 
 def _needs_model(name):
-    """Actions that themselves call the model, so they must be told which."""
     return name == "build_dashboard"
 
 
-# Options for every agent-loop model call. num_ctx, because Ollama's own
-# default context is small and an oversized prompt is silently truncated from
-# the front - deleting the system prompt and its rules mid-conversation.
-# Temperature low, because tool calls want precision, not flair: the Ollama
-# default (~0.8) is where invented tool arguments come from.
 AGENT_OPTIONS = {"temperature": 0.2, "num_ctx": OLLAMA_NUM_CTX}
 
 
 def _call_raw(call):
-    """(name, raw arguments) from a tool call, dict or ollama object."""
     function = call["function"] if isinstance(call, dict) else call.function
     name = function["name"] if isinstance(function, dict) else function.name
     raw = (
@@ -821,15 +671,6 @@ def _call_raw(call):
 
 
 def _plain_calls(calls):
-    """The turn's tool calls as plain dicts, whatever the client returned.
-
-    The ollama client hands tool calls back as typed objects. Those work
-    fine while the conversation stays in memory, but history.save writes
-    messages with json.dump(default=str), which flattens each object into
-    its repr STRING - and a chat reopened from such a file crashed on the
-    next question, because the strings fail the client's own message
-    validation. Plain dicts survive the save/load round-trip unchanged.
-    """
     plain = []
     for call in calls:
         name, raw = _call_raw(call)
@@ -839,14 +680,6 @@ def _plain_calls(calls):
 
 
 def _parse_arguments(name, raw):
-    """(arguments, error) from a call's raw arguments.
-
-    An argument string that fails to parse used to become {} silently, and
-    the tool then ran with every default - write_script wrote an empty tab
-    over the script the model had just composed. The parse failure comes
-    back as an error instead, so the loop can hand it to the model to
-    correct rather than executing something it never asked for.
-    """
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
@@ -861,23 +694,10 @@ def _parse_arguments(name, raw):
 
 def run_agent(client, model, engine, messages, allowed=None, on_call=None,
               confirm=None, max_steps=CHAT_MAX_STEPS):
-    """Run one user turn to completion, executing tool calls as they come.
-
-    Shared by the terminal chat and the web editor so both behave the same.
-
-    allowed: restrict which tools the model may use.
-    on_call: called with (name, arguments) before each call, for display.
-    confirm: called with (question, action) before anything destructive -
-        a reload, or a write_script that replaces the whole script. Return
-        False to refuse. Omit to refuse them outright.
-    """
-
     tools = TOOLS
     if allowed is not None:
         tools = [t for t in TOOLS if t["function"]["name"] in allowed]
 
-    # Category names the app itself reported this turn, so a paraphrased one
-    # can be put back before the answer is shown.
     labels = set()
 
     for _ in range(max_steps):
@@ -918,30 +738,12 @@ def run_agent(client, model, engine, messages, allowed=None, on_call=None,
     return "I stopped after too many steps. Could you narrow that down?"
 
 
-# These conversations carry large tool results - one data model dump is
-# thousands of characters. Past this budget the oldest turns are dropped,
-# because overflowing the window fails the whole request, and losing the
-# start of a conversation is a much smaller loss than that. The budget is
-# derived from OLLAMA_NUM_CTX (see config.py) so a large-context model
-# actually gets to use its memory - the old fixed 24,000 characters gave a
-# 128k-context model about 6k tokens to work with.
 MAX_HISTORY_CHARS = CHAT_HISTORY_CHARS
 
-# Per-tool-result cap. Scales with the history budget: with real memory
-# available, cutting a data model dump at 12k characters throws away columns
-# the model was about to be asked about.
 TOOL_RESULT_CHARS = max(12_000, MAX_HISTORY_CHARS // 8)
 
 
 def _tool_message(name, result):
-    """The role:'tool' message that carries one result back to the model.
-
-    tool_name is the field ollama's message schema has for saying which call
-    a result answers; without it, a turn with two calls leaves the model
-    matching results to calls by position. The truncation marker goes on
-    AFTER the slice: a bare slice can cut mid-string, and the model then
-    reads broken JSON with no sign that anything is missing.
-    """
     payload = json.dumps(result, default=str)
     if len(payload) > TOOL_RESULT_CHARS:
         payload = payload[:TOOL_RESULT_CHARS] + "...[truncated]"
@@ -949,13 +751,6 @@ def _tool_message(name, result):
 
 
 def trim_history(messages, max_chars=MAX_HISTORY_CHARS):
-    """Drop the oldest turns once the conversation gets too big.
-
-    Cuts only at user messages, never between an assistant's tool_calls and
-    the tool results that answer them - a conversation split there is
-    malformed and the model rejects it.
-    """
-
     if not messages:
         return messages
 
@@ -966,10 +761,6 @@ def trim_history(messages, max_chars=MAX_HISTORY_CHARS):
         total = 0
         for m in items:
             total += len(str(m.get("content") or ""))
-            # tool_calls carry real payloads - one write_script call holds a
-            # whole load script - so counting content alone undercounts the
-            # conversation and brings back the silent front-truncation this
-            # budget exists to prevent.
             if m.get("tool_calls"):
                 total += len(json.dumps(m["tool_calls"], default=str))
         return total
@@ -982,15 +773,9 @@ def trim_history(messages, max_chars=MAX_HISTORY_CHARS):
         if size(rest[cut:]) <= max_chars:
             return system + rest[cut:]
 
-    # Even the latest turn is over budget; keep it anyway rather than send
-    # nothing, and let the model's own limit decide.
     if starts:
         return system + rest[starts[-1]:]
 
-    # No user message to cut at. A bare rest[-2:] here could open the
-    # conversation on a role:'tool' message stranded from the assistant
-    # tool_calls it answers - exactly the malformed split promised away
-    # above - so walk back to the message that owns it.
     cut = max(len(rest) - 2, 0)
     while cut > 0 and rest[cut].get("role") == "tool":
         cut -= 1
@@ -998,12 +783,6 @@ def trim_history(messages, max_chars=MAX_HISTORY_CHARS):
 
 
 def call_parts(call):
-    """(name, arguments) from a tool call, dict or ollama object.
-
-    Unparseable arguments come back as {} - fine for display. The agent
-    loops use _parse_arguments directly so a parse failure is refused with
-    the reason, never run as all-defaults.
-    """
     name, raw = _call_raw(call)
     arguments, _ = _parse_arguments(name, raw)
     return name, arguments
@@ -1013,21 +792,6 @@ STOPPED_NOTE = "The user stopped this turn before the action ran."
 
 
 def close_open_tool_calls(messages, note=STOPPED_NOTE):
-    """Answer any tool call left hanging when a turn ends early.
-
-    A stopped turn is stopped mid-sentence. The assistant message announcing
-    the calls is already in the history, and the results that answer it are
-    not, which leaves a conversation the model cannot read: a turn that says
-    "I am calling build_dashboard" and never says what happened. The next
-    turn either errors on the malformed history or invents the answer.
-
-    So every unanswered call is answered, honestly, with the fact that it did
-    not run. That is also what tells the assistant next turn that the user
-    stopped it - it reads its own history and finds out, rather than being
-    told separately.
-
-    Returns the number of calls closed.
-    """
     for index in range(len(messages) - 1, -1, -1):
         message = messages[index]
         if message.get("role") != "assistant":
@@ -1037,8 +801,6 @@ def close_open_tool_calls(messages, note=STOPPED_NOTE):
         if not calls:
             return 0
 
-        # Results follow their announcement, so what came after this message
-        # is what has already been answered.
         answered = sum(
             1 for m in messages[index + 1:] if m.get("role") == "tool"
         )
@@ -1053,20 +815,6 @@ def close_open_tool_calls(messages, note=STOPPED_NOTE):
 
 def stream_agent(client, model, engine, messages, allowed=None, confirm=None,
                  max_steps=CHAT_MAX_STEPS):
-    """Run a turn, yielding events as they happen instead of at the end.
-
-    A local model can spend minutes on a multi-step request. Returning only
-    the finished answer makes that look like the software has hung, so the
-    caller gets each tool call as it is decided and each token as it arrives.
-
-    The caller may stop the turn by closing this generator - the Stop button
-    does exactly that. Whatever has already been built stays built; what must
-    not happen is the history losing track of it, so the tool calls left open
-    are closed on the way out whether the turn finished or was cut short.
-
-    Events: {"type": "tool"|"tool_result"|"token"|"done"}.
-    """
-
     tools = TOOLS
     if allowed is not None:
         tools = [t for t in TOOLS if t["function"]["name"] in allowed]
@@ -1079,14 +827,11 @@ def stream_agent(client, model, engine, messages, allowed=None, confirm=None,
             max_steps, labels,
         )
     finally:
-        # Runs on GeneratorExit too, which is how a stop arrives here.
         close_open_tool_calls(messages)
 
 
 def _stream_steps(client, model, engine, messages, tools, allowed, confirm,
                   max_steps, labels):
-    """The turn itself. Split out so stream_agent's finally always runs."""
-
     for _ in range(max_steps):
         content = []
         calls = []
@@ -1113,8 +858,6 @@ def _stream_steps(client, model, engine, messages, tools, allowed, confirm,
         })
 
         if not calls:
-            # The tokens already streamed are raw; the caller replaces them
-            # with this reply, which is where the repair lands.
             yield {
                 "type": "done",
                 "reply": snap_labels("".join(content).strip(), labels),
@@ -1146,22 +889,9 @@ def _stream_steps(client, model, engine, messages, tools, allowed, confirm,
 
 
 def execute(engine, name, arguments, allowed=None, confirm=None):
-    """Run one action, refusing anything withheld or declined."""
-
     function = FUNCTIONS.get(name)
 
     if allowed is not None and name not in allowed:
-        # A bare refusal is read as "this is impossible" and reported to the
-        # user as a missing capability - the exact failure the confirmation
-        # path grew its `note` to prevent, and the one that had the
-        # assistant answer "I don't have the function to delete sheets"
-        # while holding delete_sheet. Withheld and non-existent are
-        # different things, and only one of them is worth telling the user.
-        #
-        # The note goes only to a tool that REALLY exists. Told that an
-        # invented name is "switched off", a model goes looking for the
-        # setting that turns it on, and the user is sent after a capability
-        # nothing here has.
         withheld = {"error": f"{name} is not available here."}
         if function is not None:
             withheld["note"] = (
@@ -1180,9 +910,6 @@ def execute(engine, name, arguments, allowed=None, confirm=None):
             f"delete_sheet removes the sheet {(arguments or {}).get('sheet')!r} "
             "and every chart on it. Run it?"
         )
-        # Its own note. Sharing the reload's told a user whose sheet deletion
-        # was declined to press 'Load data', which does not delete anything
-        # and destroys their data if they follow it.
         note = (
             "Not permitted right now - this is a setting, not a missing "
             "capability. You CAN delete sheets; this one was declined. Say "
@@ -1191,8 +918,6 @@ def execute(engine, name, arguments, allowed=None, confirm=None):
         )
     elif name in DESTRUCTIVE:
         question = f"{name} replaces the data in this app. Run it?"
-        # Worded for both surfaces: the terminal chat has no button, so the
-        # button is named only as the thing the web editor shows.
         note = (
             "Not permitted right now - this is a setting, not a missing "
             "capability. Tell the user to run the reload themselves - in "
@@ -1200,8 +925,6 @@ def execute(engine, name, arguments, allowed=None, confirm=None):
             "on 'assistant may load data', then carry on from there."
         )
     elif name == "write_script" and (arguments or {}).get("mode") == "replace_all":
-        # The per-tab modes are safe; replace_all throws away every
-        # hand-written tab in one move, the same class of loss as a reload.
         question = (
             "write_script with mode='replace_all' overwrites the whole load "
             "script. Run it?"
@@ -1216,21 +939,14 @@ def execute(engine, name, arguments, allowed=None, confirm=None):
         question = note = None
 
     if question is not None:
-        # The action is passed as well as the question: a caller that gates
-        # on a setting has to know WHICH permission is being asked for.
-        # Answering every question with the reload toggle let a whole-script
-        # overwrite through on the strength of "assistant may load data".
         if confirm is None or not confirm(question, name):
-            # Saying only "not allowed" makes a model conclude the action is
-            # impossible and tell the user it cannot be done at all - which
-            # is how a request to load data turns into a dead end.
             return {"cancelled": True, "note": note}
 
     try:
         return function(engine, **(arguments or {}))
     except TypeError as e:
         return {"error": f"Bad arguments for {name}: {e}"}
-    except Exception as e:  # handed back so the model can correct itself
+    except Exception as e:
         return {"error": str(e)}
 
 
@@ -1903,19 +1619,10 @@ The people using this read balance sheets, not data models. A chart nobody can i
 - Never translate identifiers. Field names, table names, tab names, connection names, chart types and Qlik expressions are used exactly as they appear in the app, in every language - a translated field name builds a chart that renders empty. Translate the sentence around it, not the name inside it."""
 
 
-# The languages the interface offers. Pinning one is not the same as the
-# model guessing from the question: a banker who types a field name in
-# English inside an Uzbek sentence should not flip the answer to English.
 LANGUAGE_NAMES = {"en": "English", "ru": "Russian", "uz": "Uzbek"}
 
 
 def system_prompt(language=""):
-    """The system prompt, with the glossary in front and the language pinned.
-
-    Read per conversation rather than at import, so editing the glossary and
-    starting a new chat is enough - no restart. The rules come after the
-    glossary, so a glossary cannot loosen them.
-    """
     prompt = glossary.prompt_section() + SYSTEM_PROMPT
 
     name = LANGUAGE_NAMES.get((language or "").strip().lower())

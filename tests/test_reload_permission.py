@@ -1,10 +1,3 @@
-"""Reloading: allowed by default, and refusable without lying about it.
-
-Withholding reload outright produced a dead end - the model reported that
-reloading was impossible and kept asking the user to do it by hand, four
-times over, while the user kept saying "go ahead".
-"""
-
 import pytest
 
 import session
@@ -47,14 +40,10 @@ class TestSetting:
         assert session.allow_reload() is False
 
     def test_assistant_may_reload(self):
-        """It is gated by a setting, not absent from the toolset."""
         assert "reload_data" in web_app.ASSISTANT_TOOLS
 
 
 class TestRefusalIsHonest:
-    """The failure that started this: refused, the model told the user
-    reloading could not be done at all, instead of that it needed a click."""
-
     def refuse(self):
         return execute(FakeEngine(), "reload_data", {}, confirm=lambda q, action: False)
 
@@ -81,9 +70,6 @@ class TestRefusalIsHonest:
         assert engine.reloaded is True
 
     def test_only_the_two_unrecoverable_actions_are_gated(self):
-        """Both throw away something that cannot be got back: a reload
-        replaces every row, and deleting a sheet takes its charts with it.
-        Everything else is either read-only or scoped to its own tab."""
         assert DESTRUCTIVE == {"reload_data", "delete_sheet"}
 
 
@@ -93,7 +79,6 @@ class TestChatHonoursTheSetting:
         session._state["engine"] = FakeEngine()
         session.set_allow_reload(False)
 
-        # This is the callback web_app hands to run_agent.
         confirm = lambda question: session.allow_reload()
         assert confirm("anything") is False
 
@@ -102,9 +87,6 @@ class TestChatHonoursTheSetting:
 
 
 class TestSystemPromptGuardsTheLoadScript:
-    """The other half of that transcript: asked for four pie charts, it
-    rewrote the load script and destroyed the data that was already there."""
-
     def test_prompt_tells_it_to_check_the_data_model_first(self):
         from chat_tools import SYSTEM_PROMPT
         assert "data_model" in SYSTEM_PROMPT
@@ -120,11 +102,6 @@ class TestSystemPromptGuardsTheLoadScript:
 
 
 class TestTheSwitchOnlyCoversLoading:
-    """"Assistant may load data" is one permission, and the browser has no
-    way to ask a second question mid-answer - so it was answering EVERY
-    destructive confirmation, and a whole-script overwrite went through on
-    the strength of a switch about loading data."""
-
     def test_the_switch_permits_a_reload(self, clean):
         session.set_allow_reload(True)
         may = web_app._may_run(session.system())
@@ -142,11 +119,6 @@ class TestTheSwitchOnlyCoversLoading:
         assert may("anything", "reload_data") is False
 
     def test_the_switch_is_the_asking_user_s_own(self, clean):
-        """One person allowing a reload does not allow it for everybody.
-
-        The setting used to be module-level, so a single switch decided it
-        for every user of the server at once.
-        """
         import users
 
         cautious = users.create("cautious", "test-password-1")
@@ -158,8 +130,6 @@ class TestTheSwitchOnlyCoversLoading:
         assert web_app._may_run(theirs)("q", "reload_data") is False
 
     def test_a_refused_overwrite_leaves_the_script_alone(self, clean):
-        """Refused, not silently applied: the note steers the model to its
-        own tab rather than telling the user it cannot write scripts."""
         engine = FakeEngine()
         engine.set_script = lambda *a, **k: pytest.fail("the script was overwritten")
 

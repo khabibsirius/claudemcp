@@ -1,11 +1,3 @@
-"""Every chart type Qlik ships, not just the five we started with.
-
-The property trees come from chart_defaults.py, generated from the nebula.js
-bundles in the Qlik install itself. Guessing them from documentation produced
-a pie chart and a table that rendered blank without erroring, three times
-over - so these tests pin the things that were wrong each time.
-"""
-
 import pytest
 
 from chart_defaults import CHART_DEFAULTS
@@ -20,8 +12,6 @@ from chart_specs import (
 )
 
 def hypercube():
-    """A fresh one each time - dict() is a shallow copy and the inner lists
-    would be shared between calls."""
     return {"qDimensions": [{"qDef": {}}], "qMeasures": [{"qDef": {}}]}
 
 NEW_TYPES = [t for t in CHART_TYPES if t not in VERIFIED_TYPES]
@@ -45,8 +35,6 @@ class TestCoverage:
 
 
 class TestNameResolution:
-    """The engine's names are not what anyone says out loud."""
-
     @pytest.mark.parametrize("said,expected", [
         ("scatter", "scatterplot"),
         ("scatter plot", "scatterplot"),
@@ -74,9 +62,6 @@ class TestNameResolution:
         assert resolve_chart_type("qlik-funnel-chart-ext") == "qlik-funnel-chart-ext"
 
     def test_every_alias_lands_on_a_type_that_exists(self):
-        """The regression: "distribution" pointed at "distributionplot",
-        which has no defaults bundle - so the alias resolved to a type that
-        validation then rejected as unknown."""
         from chart_specs import CHART_ALIASES
 
         for alias, target in CHART_ALIASES.items():
@@ -84,10 +69,6 @@ class TestNameResolution:
 
 
 class TestRequirements:
-    """Read from each bundle's own targets. No amount of documentation
-    reading would have told us a scatter plot needs two measures - which is
-    why every attempt at one silently became something else."""
-
     def test_scatter_needs_two_measures(self):
         _, measures = chart_requirements("scatterplot")
         assert measures[0] == 2
@@ -125,7 +106,6 @@ class TestGeneratedProperties:
 
     @pytest.mark.parametrize("chart_type", NEW_TYPES)
     def test_carries_the_hypercube(self, chart_type):
-        """In whichever branch of the tree this bundle reads it from."""
         owner, _path = hypercube_owner(
             build_properties(chart_type, "O", "t", hypercube())
         )
@@ -138,8 +118,6 @@ class TestGeneratedProperties:
 
     @pytest.mark.parametrize("chart_type", NEW_TYPES)
     def test_keeps_the_bundle_defaults(self, chart_type):
-        """The point of generating these: the renderer's expected keys are
-        present, rather than only the ones we thought to include."""
         generated = build_properties(chart_type, "O", "t", hypercube())
         for key in CHART_DEFAULTS[chart_type]["properties"]:
             if key in ("qHyperCubeDef", "qInfo", "title", "visualization"):
@@ -147,9 +125,6 @@ class TestGeneratedProperties:
             assert key in generated, f"{chart_type} lost {key}"
 
     def test_versions_are_plain_strings(self):
-        """The generator wrote gauge's and sn-table's properties.version as
-        the doubly-quoted string '"0.8.13"' - a version carrying its own
-        quotes, unlike every sibling and any hand-built object we dumped."""
         for chart_type, spec in CHART_DEFAULTS.items():
             version = spec["properties"].get("version")
             if version is not None:
@@ -161,8 +136,6 @@ class TestGeneratedProperties:
         assert properties["qHyperCubeDef"]["qDimensions"][0]["qDef"]["qFieldDefs"] == ["Region"]
 
     def test_the_bundles_own_hypercube_settings_survive(self):
-        """Merged into the bundle's qHyperCubeDef, not over the top of it -
-        those carry per-chart settings like the data window."""
         base = CHART_DEFAULTS["treemap"]["properties"].get("qHyperCubeDef", {})
         extra = [k for k in base if k not in ("qDimensions", "qMeasures")]
         properties = build_properties("treemap", "O", "t", hypercube())
@@ -170,8 +143,6 @@ class TestGeneratedProperties:
             assert key in properties["qHyperCubeDef"]
 
     def test_the_generated_templates_are_not_shared_between_calls(self):
-        """CHART_DEFAULTS is module-level data; a chart that mutated it would
-        corrupt every chart built afterwards."""
         first = build_properties("treemap", "O", "t", hypercube())
         mutable = next(
             (k for k, v in first.items() if isinstance(v, dict) and k != "qHyperCubeDef"),
@@ -185,9 +156,6 @@ class TestGeneratedProperties:
 
 
 class TestVerifiedTypesUnchanged:
-    """The five that were confirmed rendering keep their hand-checked trees;
-    the generated defaults must not quietly replace them."""
-
     def test_pie_still_uses_donut(self):
         properties = build_properties("piechart", "O", "t", hypercube())
         assert "donut" in properties
@@ -199,10 +167,6 @@ class TestVerifiedTypesUnchanged:
         assert properties["measureAxis"]["show"] == "all"
 
     def test_table_still_declares_column_order(self):
-        """"table" is an alias onto the bundle's sn-table now: its own
-        hand-written tree went stale and drew an empty pane in a real app.
-        The column order still has to be there, it just comes from the
-        bundle rather than from us."""
         properties = build_properties(
             resolve_chart_type("table"), "O", "t", hypercube()
         )

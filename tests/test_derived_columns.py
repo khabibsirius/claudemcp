@@ -1,11 +1,3 @@
-"""Calculated columns.
-
-"Add a Year column from Report Date" had no answer: the generator could only
-copy the file's own columns, and the assistant was told never to hand-write a
-LOAD - so it refused, repeatedly, saying it was "not permitted". The rule was
-right; the missing capability was the bug.
-"""
-
 import pytest
 
 from data_prep import generate_load_script, normalise_derived
@@ -42,12 +34,9 @@ class TestNormaliseDerived:
         {},
     ])
     def test_incomplete_entries_are_dropped(self, entry):
-        """`None as [None]` would fail the syntax check and take the whole
-        script down with it."""
         assert normalise_derived([entry]) == []
 
     def test_a_trailing_alias_is_removed(self):
-        """Models often include the "as X" the generator is about to add."""
         assert normalise_derived([
             {"name": "Year", "expression": "Year([Report Date]) as Year"}
         ]) == [("Year", "Year([Report Date])")]
@@ -58,8 +47,6 @@ class TestNormaliseDerived:
         ]) == [("Y", "Year([D])")]
 
     def test_an_as_inside_a_string_literal_is_not_an_alias(self):
-        """The stripper once ate the tail of If(a, 'x as y'), leaving
-        If(a, 'x - a broken literal that failed the syntax check."""
         expression = "If([Status] = 1, 'marked as new', 'old')"
         assert normalise_derived([{"name": "Flag", "expression": expression}]) == [
             ("Flag", expression)
@@ -81,7 +68,6 @@ class TestGeneratedScript:
         assert "Year([Report Date]) as [Year]" in text
 
     def test_the_name_is_bracket_quoted(self):
-        """Names with spaces are the normal case in Qlik."""
         text = script(derived=[{"name": "High Deposit", "expression": "If([SUM]>100,1,0)"}])
         assert "as [High Deposit]" in text
 
@@ -91,7 +77,6 @@ class TestGeneratedScript:
             assert column in text
 
     def test_derived_columns_come_last(self):
-        """After the file's own fields, so an expression can refer to them."""
         text = script(derived=[{"name": "Year", "expression": "Year([Report Date])"}])
         assert text.index("[Region]") < text.index("as [Year]")
 
@@ -105,8 +90,6 @@ class TestGeneratedScript:
             assert f"as {name}" in text
 
     def test_the_field_list_stays_comma_separated(self):
-        """A missing comma between the last real field and the first derived
-        one is a syntax error."""
         text = script(derived=[{"name": "Year", "expression": "Year([Report Date])"}])
         body = text[text.index("LOAD"):text.index("FROM")]
         assert ",\n    Year([Report Date]) as [Year]" in body
@@ -133,7 +116,6 @@ class TestGeneratedScript:
         assert "[Currency]" not in text
 
     def test_numeric_columns_are_still_left_untrimmed(self):
-        """Trimming turns a number into text and Sum() over it stops working."""
         text = script(derived=[{"name": "Year", "expression": "Year([Report Date])"}])
         assert "Trim([SUM])" not in text
 
@@ -153,7 +135,6 @@ class TestToolExposesIt:
         assert "ADD NEW COLUMNS" in tool["function"]["description"]
 
     def test_the_prompt_no_longer_forbids_expressions(self):
-        """It refused four times saying it was "not permitted"."""
         from chat_tools import SYSTEM_PROMPT
 
         assert "never tell the user that adding a calculated field is impossible" in SYSTEM_PROMPT
@@ -161,11 +142,6 @@ class TestToolExposesIt:
 
 
 class TestAliasesInAnyLanguage:
-    """The alias stripper matched ASCII identifiers only, so a Russian one
-    was left in place and the generator added a second: the script came out
-    as "Year([Report Date]) as Год as [Год]" and failed the syntax check.
-    Field names in this app are as often Cyrillic as not."""
-
     @pytest.mark.parametrize("alias", ["Year", "Год", "Yil", "год_отчёта"])
     def test_an_alias_is_stripped_whatever_it_is_written_in(self, alias):
         cleaned = normalise_derived(

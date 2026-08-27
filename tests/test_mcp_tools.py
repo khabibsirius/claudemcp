@@ -1,17 +1,3 @@
-"""What the MCP endpoint exposes, and what it deliberately does not.
-
-The building tools were always few. The reading tools are the other half:
-without them a client could create a sheet but never read a figure out of
-one, so anything it said about the data was inferred from field names.
-
-The line between them is the point of this file. Everything reachable over
-MCP is read-only, because MCP cannot say who is calling - its handlers run
-in tasks started from the server's lifespan, they share one Qlik session,
-there is no confirmation step, and nothing they did would reach the audit
-trail. A load-script rewrite that no record attributes to anybody is exactly
-what this project must not have.
-"""
-
 import asyncio
 
 import pytest
@@ -33,8 +19,6 @@ class TestWhatIsExposed:
             assert name in names
 
     def test_the_reading_tools_are_there_too(self):
-        """An assistant that can build a chart but not read one is answering
-        from field names."""
         names = tool_names()
         for name in ("qlik_query", "qlik_data_model", "qlik_script",
                      "qlik_list_charts", "qlik_check_expression",
@@ -42,14 +26,12 @@ class TestWhatIsExposed:
             assert name in names
 
     def test_every_tool_the_readme_promises_exists(self):
-        """The README documented eleven tools that were never registered,
-        which is why the endpoint read as broken rather than as small."""
         import re
         from pathlib import Path
 
         readme = Path(__file__).resolve().parent.parent / "README.md"
         promised = set(re.findall(r"qlik_[a-z_]+", readme.read_text(encoding="utf-8")))
-        promised -= {"qlik_engine"}          # the module, not a tool
+        promised -= {"qlik_engine"}
         missing = promised - set(tool_names())
         assert not missing, f"README promises tools that do not exist: {sorted(missing)}"
 
@@ -57,9 +39,6 @@ class TestWhatIsExposed:
 class TestNothingDestructiveIsReachable:
 
     def test_no_tool_can_change_the_app_s_data_or_script(self):
-        """Reloading replaces every row; writing the script decides what
-        every figure is made of. Neither may happen without a person behind
-        it and a record of who."""
         assert mcp_server.READ_ONLY.isdisjoint(DESTRUCTIVE)
 
     def test_the_read_only_set_holds_no_writer(self):
@@ -69,8 +48,6 @@ class TestNothingDestructiveIsReachable:
             assert name not in mcp_server.READ_ONLY
 
     def test_an_action_outside_the_set_is_refused_not_run(self, monkeypatch):
-        """`allowed` is passed to execute() rather than assumed, so a typo
-        here fails closed instead of quietly reaching a tool that writes."""
         class Engine:
             connected = True
 
@@ -83,9 +60,6 @@ class TestNothingDestructiveIsReachable:
 
 
 class TestReadingDelegatesToTheAssistantsTools:
-    """One implementation, two front doors - rather than a second copy of
-    `query` that drifts from the one the assistant uses."""
-
     @pytest.fixture
     def engine(self, monkeypatch):
         class Engine:
@@ -118,8 +92,6 @@ class TestReadingDelegatesToTheAssistantsTools:
 
     def test_missing_lists_become_empty_rather_than_none(self, engine,
                                                          monkeypatch):
-        """None reaches the engine as a null and fails somewhere less
-        obvious than here."""
         seen = {}
         monkeypatch.setattr(
             mcp_server, "execute",
@@ -130,8 +102,6 @@ class TestReadingDelegatesToTheAssistantsTools:
 
     def test_an_engine_error_is_returned_rather_than_raised(self, engine,
                                                             monkeypatch):
-        """A tool that raises takes the client's whole call down; one that
-        answers with the reason can be acted on."""
         from qlik_engine import QlikEngineError
 
         def boom(*args, **kwargs):

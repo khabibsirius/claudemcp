@@ -1,10 +1,3 @@
-"""Tab-level editing of the load script.
-
-The Data load editor is organised into tabs. Editing one tab rather than the
-whole script is what makes AI editing safe to repeat: the model rewrites its
-own section without ever touching what someone wrote by hand.
-"""
-
 import pytest
 
 from data_prep import (
@@ -63,9 +56,6 @@ class TestSetTab:
         assert "AS b" in twice and "AS a" not in twice
 
     def test_a_preamble_before_the_first_marker_is_not_relabelled_main(self):
-        """Relabelling it 'Main' made a round-trip hand back a ///$tab Main
-        marker the user never wrote, and collided with their real Main tab -
-        set_tab on Main then replaced the preamble instead of the tab."""
         script = "SET ThousandSep=' ';\r\n///$tab Main\r\nLOAD 1;\r\n"
         result = set_tab(script, "LOAD 2 AS x AUTOGENERATE 1;", tab_name="Gen")
 
@@ -74,15 +64,10 @@ class TestSetTab:
         assert "LOAD 1;" in get_tab(result, "Main")
 
     def test_tabs_are_joined_with_lf_like_the_generated_script(self):
-        """join_tabs used CRLF while generate_load_script builds LF, so a
-        script touched by both carried mixed line endings."""
         result = set_tab("", "LOAD 1 AS x AUTOGENERATE 1;")
         assert "\r" not in result
 
     def test_a_script_from_the_engine_keeps_its_own_line_endings(self):
-        """The engine returns CRLF. Writing a tab into it in LF left the
-        script carrying both, so the next diff showed lines nobody edited -
-        and forcing the whole file to LF instead showed all of them."""
         from_engine = "///$tab Main\r\nLOAD 1 AS x AUTOGENERATE 1;\r\n"
 
         result = set_tab(from_engine, "LOAD 2 AS y AUTOGENERATE 1;", tab_name="Gen")
@@ -133,9 +118,6 @@ class FakeModelEngine:
 
 
 class TestDescribeDataModel:
-    """One call has to answer both 'how is the data shaped' and 'can I chart
-    this field', which the engine reports separately."""
-
     TABLES = [{
         "name": "Orders", "rows": 100,
         "fields": [
@@ -171,7 +153,6 @@ class TestDescribeDataModel:
         assert result["quality_counts"]["high"] == 1
 
     def test_survives_a_failing_field_list(self):
-        """Field metadata is a bonus; the table picture still comes back."""
         engine = FakeModelEngine(self.TABLES, fields_error=RuntimeError("boom"))
         result = describe_data_model(engine)
         assert result["total_rows"] == 100
@@ -182,8 +163,6 @@ class TestDescribeDataModel:
 
 
 class TestReloadProgress:
-    """A failed reload has to explain itself, or the script can't be fixed."""
-
     def test_collects_errors_and_messages(self, engine):
         engine.ws.handlers = {"GetProgress": {"qProgressData": {
             "qErrorData": [{"qMessageParameters": ["Field not found: 'Sales'"]}],
@@ -224,8 +203,6 @@ class TestReloadProgress:
 
 
 class TestSetScriptSafety:
-    """Overwriting a load script is destructive and easy to do by accident."""
-
     def test_returns_the_previous_script_for_undo(self, engine):
         engine.ws.handlers = {
             "GetScript": {"qScript": "OLD SCRIPT"},
@@ -244,7 +221,6 @@ class TestSetScriptSafety:
         with pytest.raises(Exception, match="syntax error"):
             engine.set_script("BROKEN (((")
 
-        # Last write must put the original back, not leave the broken one.
         assert engine.ws.requests_for("SetScript")[-1]["params"] == ["GOOD SCRIPT"]
 
     def test_validation_can_be_skipped_for_a_known_good_restore(self, engine):

@@ -1,15 +1,3 @@
-"""How long records about people are kept.
-
-readiness.md O2: conversations are written to disk in the clear and there is
-no audit trail of who asked what. The trail now exists - which makes the
-second half of that finding real, because it grows without bound and holds
-usernames, addresses and what somebody asked about a bank's data.
-
-The policy itself is the institution's decision. What this file pins is that
-there is a knob, that it defaults to keeping everything, and that turning it
-on removes what it says and nothing else.
-"""
-
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -27,7 +15,6 @@ def days_ago(days):
 
 
 def age_audit(action, days):
-    """Write an audit record and backdate it."""
     users.audit(action)
     users.connect().execute(
         "UPDATE audit SET at = ? WHERE id = (SELECT MAX(id) FROM audit)",
@@ -35,7 +22,6 @@ def age_audit(action, days):
 
 
 def age_chat(owner, days, title="an old question"):
-    """Save a conversation and backdate when it was last touched."""
     chat_id = history.new_id()
     history.save(chat_id, [{"role": "user", "content": title}], "data", owner=owner)
     record = history.load(chat_id, owner)
@@ -44,14 +30,7 @@ def age_chat(owner, days, title="an old question"):
     return chat_id
 
 
-# ----------------------------------------------------------------------
-# The default
-# ----------------------------------------------------------------------
-
 class TestNothingIsDeletedByDefault:
-    """Silently deleting a bank's audit trail is a worse failure than
-    keeping too much of it, so the default has to be to keep."""
-
     def test_the_audit_trail_is_kept_forever(self):
         from config import AUDIT_RETENTION_DAYS
 
@@ -76,10 +55,6 @@ class TestNothingIsDeletedByDefault:
         assert len(users.audit_trail()) == 1
 
 
-# ----------------------------------------------------------------------
-# The audit trail
-# ----------------------------------------------------------------------
-
 class TestPruningTheAuditTrail:
 
     def test_it_removes_only_what_is_older_than_the_policy(self):
@@ -99,8 +74,6 @@ class TestPruningTheAuditTrail:
         assert users.prune_audit(30) == 1
 
     def test_the_pruning_is_itself_recorded(self):
-        """So a gap in the trail is explained rather than looking like
-        somebody tampered with it."""
         age_audit("old", days=100)
         users.prune_audit(30)
 
@@ -109,22 +82,14 @@ class TestPruningTheAuditTrail:
         assert "removed" in entries[0]["detail"]
 
     def test_nothing_to_remove_writes_no_record(self):
-        """A daily prune that removed nothing should not fill the trail with
-        notes saying it removed nothing."""
         age_audit("recent", days=1)
         assert users.prune_audit(30) == 0
         assert not [e for e in users.audit_trail() if e["action"] == "audit.pruned"]
 
 
-# ----------------------------------------------------------------------
-# Conversations
-# ----------------------------------------------------------------------
-
 class TestPruningConversations:
 
     def test_it_goes_by_age_not_by_count(self):
-        """HISTORY_MAX stops one person filling the disk; this is the
-        institution saying how long a record may be kept."""
         old = age_chat(None, days=400)
         recent = age_chat(None, days=3)
 
@@ -149,8 +114,6 @@ class TestPruningConversations:
         assert len(history.listing()) == 1
 
     def test_a_conversation_with_no_timestamp_counts_as_old(self):
-        """It was written by a version that did not record one, so it is
-        older than anything that does."""
         chat_id = history.new_id()
         history.save(chat_id, [{"role": "user", "content": "hello"}])
         record = history.load(chat_id)
@@ -160,10 +123,6 @@ class TestPruningConversations:
         assert history.prune_old(365) == 1
         assert history.load(chat_id) is None
 
-
-# ----------------------------------------------------------------------
-# From the command line
-# ----------------------------------------------------------------------
 
 class TestTheCommand:
 
@@ -211,15 +170,13 @@ class TestTheCommand:
 class TestStartupAppliesIt:
 
     def test_a_failure_does_not_stop_the_server_starting(self, monkeypatch, capsys):
-        """Losing the ability to serve because a deletion failed would be
-        the wrong trade."""
         import web_app
 
         def boom(*args, **kwargs):
             raise OSError("the disk is read-only")
 
         monkeypatch.setattr(users, "prune_audit", boom)
-        web_app._apply_retention()          # must not raise
+        web_app._apply_retention()
 
     def test_it_reports_what_it_removed(self, monkeypatch, capsys):
         import web_app

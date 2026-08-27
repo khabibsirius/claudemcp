@@ -1,17 +1,3 @@
-"""Talk to your Qlik app in plain language.
-
-    python chat.py
-    python chat.py --app data --model gemma4:26b
-
-Runs entirely on your machine: a local Ollama model drives the Qlik Engine
-API through the actions in chat_tools.py. Ask it to load a folder of files,
-clean them up, or build a dashboard, and it does the Qlik part itself.
-
-The model must support tool calling. Several popular ones do not - phi4 and
-deepseek-coder among them - so if the configured model can't, this picks an
-installed one that can and says so, rather than refusing to start.
-"""
-
 import argparse
 import json
 import logging
@@ -27,8 +13,6 @@ from qlik_engine import QlikEngine, QlikEngineError
 
 log = logging.getLogger(__name__)
 
-# How many tool calls the model may make for one request before we stop it.
-# Guards against a model looping on a call that keeps failing.
 MAX_STEPS = CHAT_MAX_STEPS
 
 BANNER = """Qlik assistant. Ask in plain language, for example:
@@ -43,7 +27,6 @@ Ctrl-C or 'exit' to quit.
 
 
 def describe(name, arguments):
-    """A short human line for a tool call, so the user sees what's happening."""
     if not arguments:
         return name
     interesting = {
@@ -66,7 +49,6 @@ def confirm(question, action=None):
 
 
 def run_tool(engine, name, arguments, assume_yes=False):
-    """Execute one tool call, asking first if it would destroy data."""
     return execute(
         engine, name, arguments,
         confirm=(lambda question, action: True) if assume_yes else confirm,
@@ -74,11 +56,8 @@ def run_tool(engine, name, arguments, assume_yes=False):
 
 
 def answer(client, model, engine, messages, assume_yes=False):
-    """Run one user turn to completion, executing tool calls as they come."""
     return run_agent(
         client, model, engine, messages,
-        # ASCII only: the Windows console's default code page mangles
-        # anything else into replacement characters.
         on_call=lambda name, args: print(f"  -> {describe(name, args)}"),
         confirm=(lambda question, action: True) if assume_yes else confirm,
         max_steps=MAX_STEPS,
@@ -86,7 +65,7 @@ def answer(client, model, engine, messages, assume_yes=False):
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description="Talk to your Qlik app in plain language.")
     parser.add_argument("--app", default=APP_NAME, help=f"App to open (default: {APP_NAME!r})")
     parser.add_argument("--model", default=CHAT_MODEL, help=f"Ollama model (default: {CHAT_MODEL!r})")
     parser.add_argument("--yes", action="store_true", help="Don't ask before reloading data")
@@ -100,13 +79,8 @@ def main(argv=None):
         level=logging.DEBUG if args.verbose else logging.WARNING,
         stream=sys.stderr,
     )
-    # httpx logs every Ollama call at INFO, which drowns the conversation.
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    # Resolved through the shared session so tools that themselves call the
-    # model - build_dashboard's design step - use the model chosen here,
-    # rather than re-reading CHAT_MODEL from .env and pulling a second model
-    # into memory beside this one.
     try:
         model, note = session.resolve_model(args.model)
     except OllamaError as e:

@@ -5,9 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Qlik AI — Sign in</title>
 <script>
-  // Resolve the theme before the first paint, or the page flashes the wrong
-  // one on every load. Same key as the main page, so a choice made there is
-  // already in effect on the way back in.
+
   try {
     var saved = localStorage.getItem("qlikai-theme") || "system";
     document.documentElement.dataset.theme =
@@ -16,9 +14,7 @@
   } catch (e) {}
 </script>
 <style>
-  /* Self-contained on purpose: no external fonts or scripts - this has to
-     work with no internet. The palette is the main page's, so signing in
-     does not look like a different product. */
+
   :root {
     color-scheme: light;
     --green: #00934c; --green-dark: #007a3f; --green-soft: #e6f5ec;
@@ -159,8 +155,6 @@
 <script>
 const $ = id => document.getElementById(id);
 
-// The same three languages as the main page, and the same stored choice, so
-// signing in does not silently reset the language somebody picked.
 const LANGUAGES = [["en", "English"], ["ru", "Русский"], ["uz", "O'zbekcha"]];
 
 const STRINGS = {
@@ -257,14 +251,11 @@ $("form").addEventListener("submit", async event => {
     });
 
     if (response.ok) {
-      // Straight to the product rather than rendering anything here: the
-      // cookie is set and the page behind it is the whole point.
+
       window.location.replace("/");
       return;
     }
 
-    // The server's own words when it has specific ones - a locked account
-    // has to say so, or the person retypes a correct password five times.
     let detail = "";
     try { detail = (await response.json()).detail || ""; } catch (e) {}
     say(detail || (response.status === 429 ? t("locked") : t("wrong")));

@@ -1,25 +1,3 @@
-"""MCP server for working with a Qlik Sense app.
-
-Four tools, deliberately: open an app, look at where data comes from, build a
-sheet, save.
-
-    Home          qlik_open
-    Data manager  qlik_data_sources
-    Sheet         qlik_build_sheet, qlik_save
-
-Everything else - writing and running load scripts, cleaning data, exploring
-values - lives in the chatbot instead, where it is reached by asking rather
-than by filling in tool arguments by hand:
-
-    python chat.py
-
-Connection mode and credentials come from .env - see .env.example. Run with:
-
-    python mcp_server.py
-
-and point your MCP client at this script (stdio transport).
-"""
-
 import json
 import logging
 import sys
@@ -34,8 +12,6 @@ from dashboard_builder import build_sheet, design_dashboard, enrich_fields
 import session
 from qlik_engine import QlikEngine, QlikEngineError
 
-# stdio is the MCP transport: anything written to stdout is parsed as
-# protocol. Logs must go to stderr or they corrupt the session.
 logging.basicConfig(
     level=logging.INFO,
     stream=sys.stderr,
@@ -44,13 +20,6 @@ logging.basicConfig(
 
 log = logging.getLogger(__name__)
 
-# `mcp dev` does not run this file in your current Python environment. It
-# launches it through `uv run` in a throwaway one containing only `mcp` plus
-# whatever is declared here - so without this list the server dies on
-# `import websocket` before registering a single tool, and the Inspector
-# connects to nothing. `mcp[cli]` is included because the CLI's own bootstrap
-# passes plain `mcp`, leaving its `mcp run` entrypoint without typer.
-# Keep in sync with requirements.txt.
 SERVER_DEPENDENCIES = [
     "mcp[cli]",
     "websocket-client",
@@ -58,24 +27,16 @@ SERVER_DEPENDENCIES = [
     "python-dotenv",
 ]
 
-# Files qlik_data_sources previews rather than treating as a folder.
 DATA_FILE_SUFFIXES = (
     ".csv", ".txt", ".tab", ".qvd", ".xlsx", ".xls", ".json", ".xml", ".parquet",
 )
 
-# Spelling the choices out as Literals puts them in the tool's JSON schema as
-# an enum, so a caller can see the valid values without going and looking
-# them up in Qlik.
-# Built from CHART_TYPES so the tool schema always offers exactly what the
-# engine can create - every Qlik chart type, not the five we started with.
-ChartType = Literal[tuple(CHART_TYPES)]  # type: ignore[valid-type]
+ChartType = Literal[tuple(CHART_TYPES)]
 
 assert set(ChartType.__args__) == set(CHART_TYPES), "chart type list drifted"
 
 
 class Chart(BaseModel):
-    """One chart on a sheet."""
-
     type: ChartType = Field(description="Which visualization to draw.")
     title: str = Field(description="Shown as the chart's heading.")
     dimension: str = Field(
@@ -118,7 +79,6 @@ mcp = MCPServer(
 
 
 def _require_engine() -> QlikEngine:
-    """The shared engine - the same one the web UI and chat assistant use."""
     return session.engine()
 
 
@@ -126,44 +86,41 @@ def _connect(app_name: str) -> QlikEngine:
     return session.open_app(app_name)
 
 
-# ----------------------------------------------------------------------
-# Resources - read-only context the client can browse
-# ----------------------------------------------------------------------
-
-@mcp.resource("qlik://fields")
+@mcp.resource("qlik://fields",
+    description="""\
+The open app's fields, with tags and distinct-value counts, as JSON.""",
+)
 def qlik_fields_resource() -> str:
-    """The open app's fields, with tags and distinct-value counts, as JSON."""
     try:
         return json.dumps(_require_engine().get_fields(), indent=2)
     except QlikEngineError as e:
         return json.dumps({"error": str(e)})
 
 
-@mcp.resource("qlik://sheets")
+@mcp.resource("qlik://sheets",
+    description="""\
+The open app's sheets, as the Hub's sheet navigator sees them.""",
+)
 def qlik_sheets_resource() -> str:
-    """The open app's sheets, as the Hub's sheet navigator sees them."""
     try:
         return json.dumps(_require_engine().list_sheets(), indent=2)
     except QlikEngineError as e:
         return json.dumps({"error": str(e)})
 
 
-# ----------------------------------------------------------------------
-# Home
-# ----------------------------------------------------------------------
+@mcp.tool(
+    description="""\
+Open a Qlik Sense app, and get your bearings in one call.
 
-@mcp.tool()
+Call with no argument to list the apps available. Otherwise pass an app's
+title, filename or id. Returns how much data is loaded and how many
+sheets exist, so you know whether the app needs data loading (see
+qlik_data_sources) or is ready to chart (see the qlik://fields
+resource).
+
+This must be the first call - every other tool works on the open app.""",
+)
 def qlik_open(app: str = "") -> dict:
-    """Open a Qlik Sense app, and get your bearings in one call.
-
-    Call with no argument to list the apps available. Otherwise pass an app's
-    title, filename or id. Returns how much data is loaded and how many
-    sheets exist, so you know whether the app needs data loading (see
-    qlik_data_sources) or is ready to chart (see the qlik://fields
-    resource).
-
-    This must be the first call - every other tool works on the open app."""
-
     if not app:
         if session.connected():
             apps = session.engine().list_apps()
@@ -201,24 +158,21 @@ def qlik_open(app: str = "") -> dict:
     return summary
 
 
-# ----------------------------------------------------------------------
-# Prepare - Data manager (where the data comes from)
-# ----------------------------------------------------------------------
+@mcp.tool(
+    description="""\
+Find data to load: connections, then folders, then a file's columns.
 
-@mcp.tool()
+Call with nothing to list the app's data connections. Pass a connection
+name to list what's in it. Pass a path to a data file (.csv, .qvd, .xlsx
+and so on) to read that file's tables and real column names WITHOUT
+loading it - always do this before writing a LOAD statement, so the
+script references columns that exist rather than plausible-looking
+guesses.
+
+A load statement refers to a connection by name, as lib://<name>/<file>.
+Connection strings are returned with any credentials removed.""",
+)
 def qlik_data_sources(connection: str = "", path: str = "") -> dict:
-    """Find data to load: connections, then folders, then a file's columns.
-
-    Call with nothing to list the app's data connections. Pass a connection
-    name to list what's in it. Pass a path to a data file (.csv, .qvd, .xlsx
-    and so on) to read that file's tables and real column names WITHOUT
-    loading it - always do this before writing a LOAD statement, so the
-    script references columns that exist rather than plausible-looking
-    guesses.
-
-    A load statement refers to a connection by name, as lib://<name>/<file>.
-    Connection strings are returned with any credentials removed."""
-
     engine = _require_engine()
 
     if not connection:
@@ -251,32 +205,29 @@ def qlik_data_sources(connection: str = "", path: str = "") -> dict:
     }
 
 
+@mcp.tool(
+    description="""\
+Build a sheet of charts and save it. Two ways to call it:
 
+DESCRIBE IT - pass `instruction` in plain language and the local Ollama
+model designs the charts by reading the data model itself, e.g.
+"sales by region and a trend over time, 4 charts". Nothing else needed.
 
+SPECIFY IT - pass `charts` to say exactly what to build. Do this when you
+are choosing the charts yourself, which gives a better result than the
+local model: read the qlik://fields resource first, then pass the
+charts you want.
 
-
-@mcp.tool()
+Either way every chart is validated against the real data before it is
+created: unknown field names, and dimensions with too many distinct
+values to read, are skipped with a reason instead of becoming charts that
+render blank. Always check the 'skipped' list in the result.""",
+)
 def qlik_build_sheet(
     instruction: str = "",
     title: str = "",
     charts: list[Chart] | None = None,
 ) -> dict:
-    """Build a sheet of charts and save it. Two ways to call it:
-
-    DESCRIBE IT - pass `instruction` in plain language and the local Ollama
-    model designs the charts by reading the data model itself, e.g.
-    "sales by region and a trend over time, 4 charts". Nothing else needed.
-
-    SPECIFY IT - pass `charts` to say exactly what to build. Do this when you
-    are choosing the charts yourself, which gives a better result than the
-    local model: read the qlik://fields resource first, then pass the
-    charts you want.
-
-    Either way every chart is validated against the real data before it is
-    created: unknown field names, and dimensions with too many distinct
-    values to read, are skipped with a reason instead of becoming charts that
-    render blank. Always check the 'skipped' list in the result."""
-
     engine = _require_engine()
 
     fields = engine.get_fields()
@@ -289,20 +240,11 @@ def qlik_build_sheet(
         designed_by = "caller"
     else:
         if not (instruction or title):
-            # The caller's mistake, not an engine failure. FastMCP surfaces
-            # either as the tool's error text, but local callers catch
-            # QlikEngineError as "Qlik broke" - which this is not.
             raise ValueError(
                 "Say what you want: either instruction='sales by region, 4 charts' "
                 "to have the local model design it, or charts=[...] to specify it."
             )
-        # Real sample values and distinct counts, so the local model picks
-        # dimensions that exist and can actually be read on a chart.
         enrich_fields(engine, fields)
-        # The session's model, not a separate configured one: designing with
-        # a different model loads a second copy into memory beside the one
-        # already running the assistant. Resolved on demand so Ollama can be
-        # started after this server.
         model = session.ensure_model()
         spec = design_dashboard(
             fields, model=model, instruction=instruction or title or None
@@ -324,34 +266,15 @@ def qlik_build_sheet(
     return result
 
 
-
-@mcp.tool()
+@mcp.tool(
+    description="""\
+Save the app. Sheets, charts and script changes made in this session
+are not on disk until this runs.""",
+)
 def qlik_save() -> str:
-    """Save the app. Sheets, charts and script changes made in this session
-    are not on disk until this runs."""
     _require_engine().save()
     return "Saved."
 
-
-# ----------------------------------------------------------------------
-# Reading the app
-#
-# The building tools above are deliberately few. These are the other half:
-# reading what is already there, which is what an assistant needs before it
-# can say anything true about the app. Without them a client could create a
-# sheet but never read a figure out of one, so anything it said about the
-# data was inferred from field names.
-#
-# Every one of them is READ-ONLY, and that is a rule rather than a
-# coincidence. The tools that change things - reload_data, write_script,
-# delete_sheet - stay out until MCP can say who is calling: its handlers run
-# in tasks started from the server's lifespan, so they cannot see the
-# authenticated user, they all share one Qlik session, there is no
-# confirmation step, and nothing they did would appear in the audit trail.
-# A load-script rewrite that no record attributes to anybody is exactly what
-# this project must not have. They are reachable from the web assistant and
-# `python chat.py`, where a person is present and the trail records them.
-# ----------------------------------------------------------------------
 
 READ_ONLY = {
     "query", "data_model", "read_script", "list_charts",
@@ -360,93 +283,100 @@ READ_ONLY = {
 
 
 def _read(name: str, **arguments) -> dict:
-    """Run one read-only action, refusing anything that is not one.
-
-    `allowed` is passed rather than assumed: execute() enforces it, so a
-    typo here fails closed instead of quietly reaching a tool that writes.
-    """
     try:
         return execute(_require_engine(), name, arguments, allowed=READ_ONLY)
     except QlikEngineError as e:
         return {"error": str(e)}
 
 
-@mcp.tool()
+@mcp.tool(
+    description="""\
+Read actual values out of the open app.
+
+dimensions=["Region"], measures=["Sum([Sales])"] returns each region with
+its total, largest first, along with each row's share of the whole - the
+shares are computed here rather than left to the caller, because a share
+worked out from a truncated list is a share of the page rather than of
+the book.
+
+Measures must be a simple aggregation: Sum, Count, Count(DISTINCT ...),
+Avg, Min, Max. Anything with Aggr, SortBy or Limit fails to calculate and
+comes back empty rather than erroring.
+""",
+)
 def qlik_query(dimensions: list[str] | None = None,
                measures: list[str] | None = None,
                limit: int = 20) -> dict:
-    """Read actual values out of the open app.
-
-    dimensions=["Region"], measures=["Sum([Sales])"] returns each region with
-    its total, largest first, along with each row's share of the whole - the
-    shares are computed here rather than left to the caller, because a share
-    worked out from a truncated list is a share of the page rather than of
-    the book.
-
-    Measures must be a simple aggregation: Sum, Count, Count(DISTINCT ...),
-    Avg, Min, Max. Anything with Aggr, SortBy or Limit fails to calculate and
-    comes back empty rather than erroring.
-    """
     return _read("query", dimensions=dimensions or [],
                  measures=measures or [], limit=limit)
 
 
-@mcp.tool()
-def qlik_data_model() -> dict:
-    """What is loaded: tables, row counts, and every field with its
-    distinct-value count and null count, plus quality problems such as
-    constant or mostly-empty columns.
+@mcp.tool(
+    description="""\
+What is loaded: tables, row counts, and every field with its
+distinct-value count and null count, plus quality problems such as
+constant or mostly-empty columns.
 
-    Read this before designing anything. Cardinality is what separates a
-    category from an identifier, and a bar chart grouped by an order id with
-    65,000 values renders perfectly and tells you nothing.
-    """
+Read this before designing anything. Cardinality is what separates a
+category from an identifier, and a bar chart grouped by an order id with
+65,000 values renders perfectly and tells you nothing.
+""",
+)
+def qlik_data_model() -> dict:
     return _read("data_model")
 
 
-@mcp.tool()
-def qlik_script(tab: str = "") -> dict:
-    """Read the app's load script, or one named tab of it.
+@mcp.tool(
+    description="""\
+Read the app's load script, or one named tab of it.
 
-    Reading only. The script is written through the web assistant or
-    `python chat.py`, where a broken script is syntax-checked and rolled
-    back, and where the change is recorded against a person.
-    """
+Reading only. The script is written through the web assistant or
+`python chat.py`, where a broken script is syntax-checked and rolled
+back, and where the change is recorded against a person.
+""",
+)
+def qlik_script(tab: str = "") -> dict:
     return _read("read_script", tab=tab)
 
 
-@mcp.tool()
-def qlik_list_charts() -> dict:
-    """Every chart in the app with its id, type, title, dimensions and
-    measure expressions, and every sheet with how many charts are on it.
+@mcp.tool(
+    description="""\
+Every chart in the app with its id, type, title, dimensions and
+measure expressions, and every sheet with how many charts are on it.
 
-    Empty sheets are included: a count that silently skipped them made
-    "you have 3 sheets" wrong.
-    """
+Empty sheets are included: a count that silently skipped them made
+"you have 3 sheets" wrong.
+""",
+)
+def qlik_list_charts() -> dict:
     return _read("list_charts")
 
 
-@mcp.tool()
-def qlik_check_expression(expression: str) -> dict:
-    """Ask Qlik whether an expression is valid, without building anything.
+@mcp.tool(
+    description="""\
+Ask Qlik whether an expression is valid, without building anything.
 
-    Returns the engine's own error and any field names that do not exist.
-    Worth calling before qlik_build_sheet: Qlik does not reject a chart that
-    references a field which isn't there - it creates the object and renders
-    an empty box.
-    """
+Returns the engine's own error and any field names that do not exist.
+Worth calling before qlik_build_sheet: Qlik does not reject a chart that
+references a field which isn't there - it creates the object and renders
+an empty box.
+""",
+)
+def qlik_check_expression(expression: str) -> dict:
     return _read("check_expression", expression=expression)
 
 
-@mcp.tool()
-def qlik_analyze_sheet(sheet: str = "", chart_ids: list[str] | None = None) -> dict:
-    """Read the real numbers behind a sheet's charts and return what they show.
+@mcp.tool(
+    description="""\
+Read the real numbers behind a sheet's charts and return what they show.
 
-    Totals, the largest and smallest category, concentration and
-    period-on-period change - all computed in Python from the rows, not left
-    to a model to derive. Shares and totals are withheld for a measure that
-    does not add up, such as an average or a margin.
-    """
+Totals, the largest and smallest category, concentration and
+period-on-period change - all computed in Python from the rows, not left
+to a model to derive. Shares and totals are withheld for a measure that
+does not add up, such as an average or a margin.
+""",
+)
+def qlik_analyze_sheet(sheet: str = "", chart_ids: list[str] | None = None) -> dict:
     return _read("analyze_sheet", sheet=sheet, chart_ids=chart_ids or [])
 
 

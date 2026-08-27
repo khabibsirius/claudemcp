@@ -1,6 +1,3 @@
-# Not a packaged distribution - the modules are run directly from the repo
-# root. This file exists so pytest and ruff pick up consistent settings.
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = [".", "tests"]

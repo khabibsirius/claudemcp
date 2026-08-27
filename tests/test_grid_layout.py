@@ -1,5 +1,3 @@
-"""Sheet layout: charts must not overlap, and must stay on the sheet."""
-
 import itertools
 
 import pytest
@@ -12,7 +10,6 @@ def place_all(engine, sizes):
 
 
 def overlap(a, b):
-    """True if two (col, row, colspan, rowspan) rectangles intersect."""
     a_col, a_row, a_w, a_h = a
     b_col, b_row, b_w, b_h = b
     return not (
@@ -39,12 +36,6 @@ class TestPacking:
         assert cells[2][:2] == (0, 4)
 
     def test_short_chart_wrapping_under_a_tall_one_does_not_overlap(self, offline_engine):
-        """The regression: a row containing a tall chart, wrapped by a short one.
-
-        The packer used to advance by the *incoming* object's rowspan, so a
-        3-row KPI wrapping under a 4-row bar chart landed on row 3 - one row
-        inside the chart above it.
-        """
         cells = place_all(offline_engine, [(12, 4), (6, 3), (6, 3), (6, 3)])
 
         bar, wrapped = cells[0], cells[3]
@@ -70,8 +61,6 @@ class TestPacking:
 
 
 class TestBounds:
-    """Qlik positions objects by fractional bounds; col/row are legacy."""
-
     def cells_for(self, engine, sizes):
         cells = []
         for colspan, rowspan in sizes:
@@ -90,9 +79,7 @@ class TestBounds:
         assert cells[1]["bounds"]["x"] == 0.5
 
     def test_content_fills_the_sheet(self, offline_engine):
-        """The regression: seven charts ending at row 18 were divided by a
-        fixed 24, leaving the bottom quarter of every sheet empty."""
-        sizes = [(12, 4)] * 6 + [(24, 6)]   # what "8 dashboards" produced
+        sizes = [(12, 4)] * 6 + [(24, 6)]
         cells = self.cells_for(offline_engine, sizes)
 
         last = cells[-1]["bounds"]
@@ -114,8 +101,6 @@ class TestBounds:
         assert cells[0]["bounds"]["height"] < 1.0
 
     def test_tall_dashboards_stay_on_the_sheet(self, offline_engine):
-        """A dashboard taller than the nominal 24-row grid used to produce
-        y > 1, putting objects off the bottom of the sheet."""
         cells = self.cells_for(offline_engine, [(24, 6)] * 10)
 
         for cell in cells:
@@ -124,8 +109,6 @@ class TestBounds:
             assert bounds["y"] + bounds["height"] <= 1.0 + 1e-9
 
     def test_every_cell_is_renormalised_together(self, offline_engine):
-        """Adding a tall object rescales the ones already placed, rather than
-        leaving them sized against a stale divisor."""
         cells = self.cells_for(offline_engine, [(12, 4)])
         first_height = cells[0]["bounds"]["height"]
 

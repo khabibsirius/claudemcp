@@ -1,11 +1,3 @@
-"""The shared session.
-
-The web UI, the assistant and the MCP tools all work on one open app. Qlik
-Sense Desktop allows only one session per app, so two connections would lock
-each other out - sharing is not an optimisation, it is the only thing that
-works.
-"""
-
 import pytest
 
 import mcp_server
@@ -60,13 +52,6 @@ def clean():
 
 @pytest.fixture
 def reconnecting(monkeypatch):
-    """One fake engine that comes back after a reconnect.
-
-    Changing app drops the session and opens a new one - Qlik Sense Desktop
-    keeps a single app open per engine and releases it only when the socket
-    holding it closes. Without this the second open would build a real
-    QlikEngine and reach for a live Qlik.
-    """
     fake = FakeEngine()
 
     def new_session():
@@ -98,10 +83,6 @@ class TestConnection:
         assert fake.opened == ["data"]
 
     def test_switching_app_starts_a_new_session(self, clean, reconnecting):
-        """Keeping the connection is what made the app impossible to change:
-        Qlik Sense Desktop keeps one app open per engine and frees it only
-        when the socket holding it closes, so the next open was refused with
-        "a document is already open"."""
         session.open_app("data")
         dropped = []
         reconnecting.close = lambda: dropped.append(True)
@@ -113,7 +94,6 @@ class TestConnection:
         assert session.app_name() == "data1"
 
     def test_switching_app_resets_the_conversation(self, clean, reconnecting):
-        """Otherwise it answers confidently about the previous app's fields."""
         session.open_app("data")
         session.messages().append({"role": "user", "content": "about data"})
 
@@ -133,12 +113,7 @@ class TestConnection:
         assert session.connected() is False
         assert session.app_name() is None
 
-
     def test_a_dead_connection_on_switch_tears_down(self, clean, monkeypatch):
-        """A connection-type failure means the old app is not usable either,
-        so the switch tears down to "nothing open". An app-level failure is
-        different - engine.open_app changes nothing until OpenDoc succeeds,
-        so that keeps the old app (pinned in test_web_app.py)."""
         class RefusesSecond(FakeEngine):
             def open_app(self, name):
                 if self.opened:
@@ -157,10 +132,6 @@ class TestConnection:
         assert session.app_name() is None
 
     def test_a_failed_open_on_a_fresh_connection_tears_down(self, clean):
-        """The old app_name outlived its connection: after the socket died,
-        a failed open on the replacement engine kept claiming that app, and
-        reopening it short-circuited as "already open" against a document
-        that was never opened - every later call then failed until restart."""
         class RefusesEverything(FakeEngine):
             def open_app(self, name):
                 raise QlikEngineError("no such app")
@@ -168,7 +139,7 @@ class TestConnection:
         stale = FakeEngine()
         session._state["engine"] = stale
         session.open_app("data")
-        stale.connected = False          # the engine dropped the socket
+        stale.connected = False
 
         with pytest.raises(QlikEngineError):
             session.open_app("typo")
@@ -181,10 +152,6 @@ class TestChatFiling:
 
     def test_switching_apps_files_the_old_chat_under_its_own_app(self, clean, tmp_path,
                                                                  monkeypatch, reconnecting):
-        """The chat being replaced was asked against the app that was open
-        at the time. It used to be filed under the app being switched TO,
-        so reopening it restored it over the wrong data model - and the
-        mismatch check saw two matching names and said nothing."""
         import history
         monkeypatch.setattr(history, "HISTORY_DIR", str(tmp_path))
 
@@ -243,9 +210,6 @@ class TestModel:
 
 
 class TestEverythingSharesOneSession:
-    """The whole point of the refactor: the MCP tools and the web API are
-    looking at the same open app, not two competing connections."""
-
     def test_mcp_tools_use_the_shared_engine(self, clean):
         fake = FakeEngine()
         session._state["engine"] = fake
@@ -276,8 +240,6 @@ class TestWebAppMountsMcp:
         assert "/mcp" in mounts
 
     def test_assistant_has_the_whole_toolset(self):
-        """Reloading is gated by a setting, not withheld - see
-        test_reload_permission.py for why that distinction matters."""
         import web_app
 
         for name in ("build_dashboard", "write_script", "reload_data"):

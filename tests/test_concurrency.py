@@ -1,15 +1,3 @@
-"""How many people can use this at once.
-
-The ceiling that mattered was not in this codebase at all: every endpoint is
-a plain `def`, Starlette runs those in a worker thread, and anyio's default
-pool is forty. A chat turn holds its thread for the whole turn, so the
-forty-first concurrent chat did not queue - it blocked the whole server,
-login page included.
-
-That is exactly the kind of limit that comes back silently, so it is pinned
-here rather than left as a comment.
-"""
-
 import threading
 import time
 
@@ -26,8 +14,6 @@ from config import WORKER_THREADS
 class TestTheRequestThreadCeiling:
 
     def test_the_default_would_block_at_forty(self):
-        """The number this exists to raise. If anyio's default ever changes,
-        this says so rather than the comment quietly going stale."""
         async def measure():
             return anyio.to_thread.current_default_thread_limiter().total_tokens
 
@@ -44,12 +30,9 @@ class TestTheRequestThreadCeiling:
         assert live == WORKER_THREADS
 
     def test_it_is_configured_well_above_the_default(self):
-        """Sized for people mid-question at once, not for accounts."""
         assert WORKER_THREADS >= 64
 
     def test_raising_is_idempotent(self):
-        """Called again - a second app instance in one process, as the tests
-        do - it must not lower a ceiling somebody already raised."""
         async def twice():
             web_app.widen_the_threadpool()
             first = anyio.to_thread.current_default_thread_limiter().total_tokens
@@ -60,7 +43,6 @@ class TestTheRequestThreadCeiling:
         assert first == second == WORKER_THREADS
 
     def test_it_never_lowers_a_higher_ceiling(self, monkeypatch):
-        """An operator who set it higher by hand keeps their setting."""
         monkeypatch.setattr(web_app, "WORKER_THREADS", 8)
 
         async def attempt():
@@ -73,9 +55,6 @@ class TestTheRequestThreadCeiling:
 
 
 class TestTheModelConnectionPool:
-    """A pool per user would mean hundreds of pools, each paying its own TLS
-    handshake and none reusing a connection anybody else opened."""
-
     @pytest.fixture(autouse=True)
     def hosted(self, monkeypatch):
         monkeypatch.setattr(llm, "LLM_PROVIDER", "openai")
@@ -100,8 +79,6 @@ class TestTheModelConnectionPool:
         assert LLM_MAX_CONNECTIONS >= WORKER_THREADS or LLM_MAX_CONNECTIONS >= 100
 
     def test_building_it_from_many_threads_makes_one(self):
-        """Two first requests arriving together must not each install their
-        own pool."""
         made = []
         barrier = threading.Barrier(8)
 
@@ -121,12 +98,9 @@ class TestTheModelConnectionPool:
         llm.build_client()
         llm.close_shared()
         llm.close_shared()
-        # And it comes back for the next caller rather than staying dead.
         assert llm.build_client() is not None
 
     def test_a_local_model_is_not_shared(self, monkeypatch):
-        """Ollama's client is cheap and local; there is nothing to share, and
-        pretending otherwise would hand every user one connection."""
         monkeypatch.setattr(llm, "LLM_PROVIDER", "ollama")
 
         class FakeOllama:
@@ -139,9 +113,6 @@ class TestTheModelConnectionPool:
 
 
 class TestSessionsDoNotSerialiseOnEachOther:
-    """The whole point of per-user engines: two people asking at once are two
-    people asking at once, not a queue."""
-
     @pytest.fixture(autouse=True)
     def enterprise(self, monkeypatch):
         monkeypatch.setattr(session, "per_user_engines", lambda: True)
@@ -156,8 +127,6 @@ class TestSessionsDoNotSerialiseOnEachOther:
         assert self.make("u1").lock is not self.make("u2").lock
 
     def test_one_turn_does_not_block_another(self):
-        """Held locks are per session, so a long turn for one person leaves
-        everybody else's requests free to run."""
         one, other = self.make("u1"), self.make("u2")
         ran = threading.Event()
 
@@ -173,8 +142,6 @@ class TestSessionsDoNotSerialiseOnEachOther:
         assert ran.is_set(), "a second user waited on the first user's lock"
 
     def test_a_user_without_a_qlik_identity_falls_back_to_the_shared_lock(self):
-        """Worth knowing at scale: on Enterprise, anyone left without a Qlik
-        identity serialises against everybody else in the same position."""
         nobody = session.Session("u9", {"id": 9, "username": "u9"})
         also_nobody = session.Session("u8", {"id": 8, "username": "u8"})
         assert nobody.lock is also_nobody.lock
@@ -182,14 +149,7 @@ class TestSessionsDoNotSerialiseOnEachOther:
 
 
 class TestTheSessionRegistry:
-    """Ids start high on purpose: the shared fixture seeds an administrator
-    as user 1 and points its session at the system one, so a test using low
-    ids would be counting that alias rather than its own sessions."""
-
     def test_the_cap_is_soft_not_a_wall(self, monkeypatch):
-        """A server genuinely busy with more people than the cap keeps them
-        all - only sessions idle past the timeout are closed, so nobody is
-        evicted mid-question."""
         monkeypatch.setattr(session, "MAX_USER_SESSIONS", 3)
         monkeypatch.setattr(session, "USER_SESSION_IDLE_MINUTES", 60)
 

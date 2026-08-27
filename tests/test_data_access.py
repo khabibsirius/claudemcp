@@ -1,9 +1,3 @@
-"""Reading real data: profiling, evaluation and ad-hoc queries.
-
-These are what let the model reason about the data rather than only about
-field names - the gap that produced a table grouped by 65,752 order ids.
-"""
-
 import pytest
 
 from dashboard_builder import (
@@ -49,8 +43,6 @@ def hypercube_layout(dimensions, measures, matrix, total=None):
 class TestFieldCardinality:
 
     def test_get_fields_keeps_the_distinct_count(self, engine):
-        """qCardinal comes back from the engine for free and used to be
-        discarded, leaving the model unable to tell a category from an id."""
         engine.ws.handlers = {
             "CreateSessionObject": SESSION,
             "DestroySessionObject": {},
@@ -80,8 +72,6 @@ class TestProfileField:
         assert profile["samples"] == ["Consumer", "Corporate", "Home Office"]
 
     def test_omits_min_max_for_text_fields(self, engine):
-        """The engine reports qMin/qMax as 0 for text, which reads as a real
-        measurement if it isn't filtered out."""
         engine.ws.handlers = {
             "CreateSessionObject": SESSION,
             "DestroySessionObject": {},
@@ -186,20 +176,16 @@ class TestQuery:
         assert result["total_rows"] == 5
 
     def test_text_cells_use_qtext_not_the_nan_sentinel(self, query_engine):
-        """Measure cells omit qIsNumeric, and text cells carry qNum as the
-        string "NaN" - so the value's type is what to branch on."""
         rows = query_engine.query(dimensions=["Market"], measures=["Sum([Sales])"])["rows"]
         assert all(isinstance(r["Market"], str) for r in rows)
         assert all(isinstance(r["Sum([Sales])"], float) for r in rows)
 
     def test_sorts_descending_by_the_first_measure(self, query_engine):
-        """How a real 'top N' is expressed - putting SortBy in the expression
-        makes the chart silently fail to calculate."""
         query_engine.query(dimensions=["Market"], measures=["Sum([Sales])"], limit=5)
 
         cube = query_engine.ws.requests_for("CreateSessionObject")[0]["params"][0]["qHyperCubeDef"]
         assert cube["qMeasures"][0]["qSortBy"] == {"qSortByNumeric": -1}
-        assert cube["qInterColumnSortOrder"][0] == 1  # the measure column
+        assert cube["qInterColumnSortOrder"][0] == 1
         assert cube["qInitialDataFetch"][0]["qHeight"] == 5
 
     def test_adds_the_equals_prefix_to_measures(self, query_engine):
@@ -218,8 +204,6 @@ class TestQuery:
 
 
 class TestCardinalityGuard:
-    """The regression from the screenshot: a table grouped by Order Id."""
-
     FIELD_INFO = {
         "Order Id": {"name": "Order Id", "cardinality": 65752},
         "Market": {"name": "Market", "cardinality": 5},
@@ -272,9 +256,9 @@ class TestEnrichFields:
 
         fields = [
             {"name": "Market", "cardinality": 5},
-            {"name": "Order Id", "cardinality": 65752},   # an id, skip
-            {"name": "Constant", "cardinality": 1},       # nothing to learn
-            {"name": "NoInfo"},                           # unknown, skip
+            {"name": "Order Id", "cardinality": 65752},
+            {"name": "Constant", "cardinality": 1},
+            {"name": "NoInfo"},
         ]
 
         enrich_fields(engine, fields)

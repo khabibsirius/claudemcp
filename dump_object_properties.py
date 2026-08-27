@@ -1,15 +1,3 @@
-"""Dump the full saved properties of every object in an app.
-
-    python dump_object_properties.py
-    python dump_object_properties.py --filter Sales
-    python dump_object_properties.py --type piechart
-
-This is how the property trees in chart_specs.py were derived: build a chart
-by hand in the Qlik client until it renders correctly, dump it here, and copy
-the real shape rather than guessing from the documentation. Use it whenever
-you add a chart type or a chart renders blank for no obvious reason.
-"""
-
 import argparse
 import json
 import sys
@@ -17,12 +5,11 @@ import sys
 from config import APP_NAME
 from qlik_engine import QlikEngine, QlikEngineError
 
-# Containers and internals rather than visualizations - never interesting here.
 SKIPPED_TYPES = {"sheet", "LoadModel", "loadModel", "MasterObject", "AppPropsList"}
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description="Dump the full saved properties of every object in an app.")
     parser.add_argument("--app", default=APP_NAME, help=f"App to dump (default: {APP_NAME!r})")
     parser.add_argument(
         "--filter", dest="filter_text", default=None,

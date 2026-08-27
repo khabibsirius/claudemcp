@@ -1,16 +1,11 @@
-# Secrets / local config
 .env
-# Backups of it hold the same credentials it does.
 .env.backup*
 .env.*.bak
 
-# The institution's own definitions - theirs, not the project's.
-# glossary.example.md is the template that is committed.
 glossary.md
 *.pem
 certs/
 
-# Python
 __pycache__/
 *.py[cod]
 .venv/
@@ -21,21 +16,17 @@ env/
 .mypy_cache/
 .ruff_cache/
 
-# Editors / OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
 
-# Claude Code local settings
 .claude/settings.local.json
 node_modules/
 tools/chart_defaults.json
 tools/extract.log
 tools/package-lock.json
 
-# The account database, if USERS_DB is ever pointed inside the checkout.
-# It holds password hashes and the audit trail.
 *.db
 *.db-wal
 *.db-shm

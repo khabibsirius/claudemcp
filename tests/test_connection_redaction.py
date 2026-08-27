@@ -1,16 +1,7 @@
-"""Credentials must not leave the engine layer.
-
-Qlik stores a connection string verbatim, tokens and all. These strings are
-returned to an LLM and, depending on the client, sent to a hosted model and
-kept in a transcript - so the secret is removed here rather than trusted not
-to travel.
-"""
-
 import pytest
 
 from qlik_engine import redact_connection_string
 
-# Shape of a real Qlik REST connection: the token sits in the URL's query.
 REST_CONNECTION = (
     'CUSTOM CONNECT TO "provider=QvRestConnector.exe;'
     "url=https://data.example.uz/apiPartner/Partner/WebService"
@@ -50,7 +41,6 @@ class TestOtherConnectionTypes:
         "/home/user/data/",
     ])
     def test_folder_paths_pass_through(self, path):
-        """A local path is the useful part and holds nothing secret."""
         assert redact_connection_string(path, "folder") == path
 
     def test_folder_type_is_matched_case_insensitively(self):
@@ -79,12 +69,9 @@ class TestListConnectionsIntegration:
 
         for secret in SECRETS:
             assert secret not in connections["rest"]["path"]
-        # The folder path stays usable.
         assert connections["dataset"]["path"] == "C:\\qlik\\doc\\dataset\\"
 
     def test_names_survive_because_lib_paths_need_them(self, engine):
-        """Loading data needs the connection *name* for lib://, never the
-        connection string - so redaction costs nothing functionally."""
         engine.ws.handlers = {"GetConnections": {"qConnections": [
             {"qId": "1", "qName": "rest", "qType": "rest",
              "qConnectionString": REST_CONNECTION},

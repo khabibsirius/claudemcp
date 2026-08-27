@@ -1,10 +1,3 @@
-"""Saved conversations: what lands on disk, and what comes back.
-
-The point of this history is that reopening a chat restores the model's
-context and not just the transcript, so the tests check the message list
-itself rather than only what the sidebar would show.
-"""
-
 import json
 
 import pytest
@@ -16,7 +9,6 @@ import web_app
 
 @pytest.fixture(autouse=True)
 def store(tmp_path, monkeypatch):
-    """Point history at a scratch directory for every test in this file."""
     monkeypatch.setattr(history, "HISTORY_DIR", str(tmp_path))
     monkeypatch.setattr(history, "HISTORY_MAX", 200)
     return tmp_path
@@ -30,10 +22,6 @@ def chat(*questions):
     return messages
 
 
-# ----------------------------------------------------------------------
-# Ids
-# ----------------------------------------------------------------------
-
 def test_new_id_is_valid_and_unique():
     first, second = history.new_id(), history.new_id()
     assert history.valid_id(first)
@@ -43,29 +31,23 @@ def test_new_id_is_valid_and_unique():
 @pytest.mark.parametrize("bad", [
     "../../../etc/passwd",
     "..\\..\\windows\\system32",
-    "20260810-120000-ab",        # too short
-    "20260810-120000-zzzz",      # not hex
+    "20260810-120000-ab",
+    "20260810-120000-zzzz",
     "20260810-120000-abcd.json",
-    "20260810-120000-abcd\n",     # $ matched before the trailing newline
+    "20260810-120000-abcd\n",
     "", None, "*",
 ])
 def test_bad_ids_are_rejected(bad):
-    """Ids come back from the browser, so they are validated on the way in."""
     assert not history.valid_id(bad)
     with pytest.raises(ValueError):
         history._path(bad)
 
 
 def test_traversal_cannot_escape_the_directory(store):
-    """The guard is what stops a crafted id writing outside the store."""
     with pytest.raises(ValueError):
         history.save("../escaped", chat("hi"), "data")
     assert not (store.parent / "escaped.json").exists()
 
-
-# ----------------------------------------------------------------------
-# Round trip
-# ----------------------------------------------------------------------
 
 def test_save_then_load_returns_the_same_messages():
     chat_id = history.new_id()
@@ -94,7 +76,6 @@ def test_title_ignores_the_system_prompt():
 
 
 def test_empty_conversation_is_not_saved():
-    """Opening or switching apps must not litter the sidebar with blanks."""
     chat_id = history.new_id()
     assert history.save(chat_id, [{"role": "system", "content": "rules"}]) is None
     assert history.load(chat_id) is None
@@ -109,10 +90,6 @@ def test_resaving_keeps_the_original_creation_time():
     history.save(chat_id, chat("first", "second"), "data")
     assert history.load(chat_id)["created"] == created
 
-
-# ----------------------------------------------------------------------
-# Listing
-# ----------------------------------------------------------------------
 
 def test_listing_is_newest_first():
     for name, stamp in [("old", "2026-01-01T00:00:00+00:00"),
@@ -133,7 +110,6 @@ def test_listing_counts_turns_not_messages():
 
 
 def test_one_damaged_file_does_not_break_the_list(store):
-    """A bad chat should cost its own row, not the whole sidebar."""
     history.save(history.new_id(), chat("good"), "data")
     (store / "20260101-000000-dead.json").write_text("{not json", encoding="utf-8")
 
@@ -150,10 +126,6 @@ def test_load_rejects_a_file_of_the_wrong_shape(store):
     (store / "20260101-000000-beef.json").write_text('["nope"]', encoding="utf-8")
     assert history.load("20260101-000000-beef") is None
 
-
-# ----------------------------------------------------------------------
-# Pruning and deleting
-# ----------------------------------------------------------------------
 
 def test_prune_keeps_only_the_newest(monkeypatch):
     monkeypatch.setattr(history, "HISTORY_MAX", 3)
@@ -187,10 +159,6 @@ def test_deleting_a_missing_chat_is_not_an_error():
     history.delete(history.new_id())
 
 
-# ----------------------------------------------------------------------
-# The live session
-# ----------------------------------------------------------------------
-
 def test_reset_files_the_old_chat_and_starts_a_new_one():
     session.reset_chat()
     first = session.chat_id()
@@ -203,7 +171,6 @@ def test_reset_files_the_old_chat_and_starts_a_new_one():
 
 
 def test_reopening_restores_what_the_model_remembers():
-    """The whole point: context comes back, not just the pixels."""
     session.reset_chat()
     session.messages().append({"role": "user", "content": "remember this"})
     session.persist()
@@ -218,7 +185,6 @@ def test_reopening_restores_what_the_model_remembers():
 
 
 def test_reopening_repairs_a_file_with_no_system_prompt(store):
-    """Hand-edited or older files still have to carry the tool rules."""
     chat_id = history.new_id()
     history.save(chat_id, [{"role": "user", "content": "hi"}], "data")
 
@@ -253,8 +219,6 @@ def test_switching_chats_saves_the_one_being_left():
 
 
 def test_reopening_a_chat_reopens_the_app_it_was_about(monkeypatch):
-    """The regression: a chat saved against another app was restored on top
-    of whatever was open, so the model reasoned about the wrong data model."""
     class Switchable:
         connected = True
 
@@ -268,8 +232,6 @@ def test_reopening_a_chat_reopens_the_app_it_was_about(monkeypatch):
             self.connected = False
 
     engine = Switchable()
-    # Changing app opens a new session - Desktop frees an app only when the
-    # socket holding it closes - so the same fake stands in for that one too.
     def new_session():
         engine.connected = True
         return engine
@@ -291,9 +253,6 @@ def test_reopening_a_chat_reopens_the_app_it_was_about(monkeypatch):
 
 
 def test_a_chat_whose_app_cannot_be_reopened_still_loads_but_says_so():
-    """Losing the transcript would be worse than the mismatch - but the
-    caller has to hear about it rather than silently answering about the
-    wrong app's fields."""
     class Refuses:
         connected = True
 
@@ -326,11 +285,10 @@ def test_deleting_the_open_chat_starts_a_fresh_one():
     session.delete_chat(open_id)
     assert session.chat_id() != open_id
     assert history.load(open_id) is None
-    assert len(session.messages()) == 1      # the system prompt only
+    assert len(session.messages()) == 1
 
 
 def test_an_unwritable_store_does_not_lose_the_answer(monkeypatch):
-    """History is a convenience; a failure to save must not fail the turn."""
     def boom(*a, **kw):
         raise OSError("disk full")
 
@@ -342,12 +300,7 @@ def test_an_unwritable_store_does_not_lose_the_answer(monkeypatch):
     assert session.messages()[-1]["content"] == "still answered"
 
 
-# ----------------------------------------------------------------------
-# What the browser is shown
-# ----------------------------------------------------------------------
-
 def test_transcript_hides_the_plumbing():
-    """Replaying tool JSON at the user would show them what they never saw."""
     messages = [
         {"role": "system", "content": "the rules"},
         {"role": "user", "content": "chart my sales"},
@@ -365,10 +318,6 @@ def test_transcript_of_nothing_is_empty():
     assert web_app.transcript(None) == []
     assert web_app.transcript([]) == []
 
-
-# ----------------------------------------------------------------------
-# Over HTTP
-# ----------------------------------------------------------------------
 
 @pytest.fixture
 def client():
@@ -389,7 +338,6 @@ def client():
 
 
 def test_state_carries_the_open_chat_back_to_a_refreshed_page(client):
-    """The refresh case: the server still has the conversation."""
     session.messages().append({"role": "user", "content": "what is loaded?"})
     session.persist()
 
@@ -430,8 +378,6 @@ def test_open_endpoint_restores_context_and_transcript(client):
 
 
 def test_get_chat_is_read_only_so_prefetch_cannot_switch(client):
-    """The regression: GET /api/chats/{id} switched the live conversation,
-    so a browser prefetching sidebar links silently swapped the open chat."""
     session.messages().append({"role": "user", "content": "restore me"})
     session.persist()
     saved = session.chat_id()
@@ -457,22 +403,14 @@ def test_delete_endpoint_removes_the_chat(client):
 @pytest.mark.parametrize("path", [
     "/api/chats/..%2F..%2Fsecrets",
     "/api/chats/not-an-id",
-    "/api/chats/20260101-000000-abcd",   # well-formed but absent
+    "/api/chats/20260101-000000-abcd",
 ])
 def test_bad_chat_ids_are_404_not_a_stack_trace(client, path):
     assert client.get(path).status_code == 404
     assert client.post(path + "/open").status_code == 404
 
 
-# ----------------------------------------------------------------------
-# Repairing older saves
-# ----------------------------------------------------------------------
-
 def test_a_chat_saved_with_flattened_tool_calls_is_repaired(store):
-    """Chats saved before tool calls were stored as plain dicts hold them
-    as repr strings - reopening one and asking the next question crashed
-    on the model's message validation. The strings are unrecoverable, so
-    load() drops them and keeps the tool results that followed."""
     chat_id = history.new_id()
     messages = chat("show sales")
     messages.insert(2, {
@@ -505,27 +443,18 @@ def test_repair_keeps_the_tool_calls_that_are_still_dicts(store):
     assert kept == [good]
 
 
-# ----------------------------------------------------------------------
-# The order of the sidebar
-# ----------------------------------------------------------------------
-
 @pytest.fixture
 def ticking_clock(monkeypatch):
-    """A distinct timestamp per save, so ordering is not a race."""
     tick = iter(f"2026-08-24T10:{minute:02d}:00+00:00" for minute in range(60))
     monkeypatch.setattr(history, "_now", lambda: next(tick))
 
 
 def test_visiting_a_chat_does_not_move_it_up_the_list(store, ticking_clock):
-    """The sidebar is ordered by "updated", and leaving a chat writes it
-    again - so merely opening an old chat re-dated it and swapped it above
-    the one the user had just been typing in."""
     older, newer = history.new_id(), history.new_id()
     history.save(older, chat("an old question"))
     history.save(newer, chat("what i just asked"))
     stamps = {c["id"]: c["updated"] for c in history.listing()}
 
-    # What leaving the old chat again does: the same messages, saved again.
     history.save(older, chat("an old question"))
 
     assert [c["id"] for c in history.listing()] == [newer, older]
@@ -533,7 +462,6 @@ def test_visiting_a_chat_does_not_move_it_up_the_list(store, ticking_clock):
 
 
 def test_a_chat_that_was_talked_in_does_move_up(store, ticking_clock):
-    """The other half of the rule: a real new turn is what re-dates a chat."""
     older, newer = history.new_id(), history.new_id()
     history.save(older, chat("an old question"))
     history.save(newer, chat("what i just asked"))
@@ -542,10 +470,6 @@ def test_a_chat_that_was_talked_in_does_move_up(store, ticking_clock):
 
     assert [c["id"] for c in history.listing()] == [older, newer]
 
-
-# ----------------------------------------------------------------------
-# Renaming
-# ----------------------------------------------------------------------
 
 def test_rename_gives_the_chat_its_own_name(store):
     chat_id = history.new_id()
@@ -558,8 +482,6 @@ def test_rename_gives_the_chat_its_own_name(store):
 
 
 def test_a_renamed_chat_keeps_its_name_when_it_is_talked_in_again(store):
-    """The name is derived from the first question on every save, so without
-    this the next answer would quietly rename the chat back."""
     chat_id = history.new_id()
     history.save(chat_id, chat("what is total sales?"), "data")
     history.rename(chat_id, "Sales review")
@@ -570,8 +492,6 @@ def test_a_renamed_chat_keeps_its_name_when_it_is_talked_in_again(store):
 
 
 def test_renaming_does_not_move_the_chat_up_the_list(store, ticking_clock):
-    """A name is not a change to the conversation, and the sidebar is
-    ordered by when a chat was last talked in."""
     older, newer = history.new_id(), history.new_id()
     history.save(older, chat("an old question"))
     history.save(newer, chat("what i just asked"))
@@ -606,7 +526,6 @@ def test_renaming_a_chat_that_is_not_there_is_none(store):
 
 
 def test_renaming_keeps_the_conversation_intact(store):
-    """Only the name changes - the messages are what the model remembers."""
     chat_id = history.new_id()
     messages = chat("what is total sales?", "and by region?")
     history.save(chat_id, messages, "data")

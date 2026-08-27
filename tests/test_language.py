@@ -1,13 +1,3 @@
-"""Pinning the language the assistant answers in.
-
-The assistant already replied in whatever language the question was written
-in. That is not enough for the people this is for: a banker types a field
-name in English inside an Uzbek sentence, and the answer flips to English.
-The interface language is the instruction, and it has to reach the
-conversation that is already open - a setting that only takes effect in the
-next chat reads as a broken switch.
-"""
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -24,8 +14,6 @@ def clean_session():
     session._state.update({"messages": [], "language": ""})
 
 
-# -- the prompt ---------------------------------------------------------
-
 def test_no_language_leaves_the_assistant_following_the_question():
     assert system_prompt() == SYSTEM_PROMPT
     assert "ANSWER IN" not in system_prompt("")
@@ -41,13 +29,11 @@ def test_the_code_is_matched_however_it_is_written():
 
 
 def test_a_language_we_do_not_have_is_ignored_rather_than_pasted_in():
-    """A junk code must not become "ANSWER IN KLINGON" in the prompt."""
     assert "ANSWER IN" not in system_prompt("klingon")
     assert "ANSWER IN" not in system_prompt(None)
 
 
 def test_pinning_a_language_does_not_licence_translating_the_data():
-    """The whole point of the label repair is undone if this slips."""
     prompt = system_prompt("uz")
 
     assert "never translated" in prompt
@@ -64,8 +50,6 @@ def test_the_glossary_still_comes_first(monkeypatch, tmp_path):
     assert SYSTEM_PROMPT in prompt
 
 
-# -- the session --------------------------------------------------------
-
 def test_setting_it_rewrites_the_conversation_already_open():
     session._state["messages"] = [
         {"role": "system", "content": system_prompt()},
@@ -74,7 +58,6 @@ def test_setting_it_rewrites_the_conversation_already_open():
     session.set_language("uz")
 
     assert "ANSWER IN UZBEK" in session.messages()[0]["content"]
-    # Nothing else about the conversation is disturbed.
     assert session.messages()[1] == {"role": "user", "content": "hi"}
 
 
@@ -99,8 +82,6 @@ def test_a_new_chat_is_started_in_the_chosen_language():
     assert "ANSWER IN UZBEK" in session.messages()[0]["content"]
 
 
-# -- the endpoint -------------------------------------------------------
-
 @pytest.fixture
 def client():
     session._state.update({
@@ -123,7 +104,6 @@ def test_switching_something_else_leaves_the_language_alone(client):
 
 
 def test_an_empty_string_turns_it_off_rather_than_being_ignored(client):
-    """"" is a real choice - follow the question again - not "no value given"."""
     session.set_language("ru")
     client.post("/api/select", json={"language": ""})
 

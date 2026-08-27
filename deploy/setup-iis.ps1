@@ -1,49 +1,3 @@
-<#
-.SYNOPSIS
-    Put IIS in front of Qlik AI as an HTTPS reverse proxy.
-
-.DESCRIPTION
-    Qlik AI listens on 127.0.0.1:8000 and speaks plain HTTP. That is
-    deliberate: it is not the job of an application server to hold a
-    certificate. This puts IIS in front on 443, terminates TLS there, and
-    forwards to the app.
-
-    Why it matters more than it sounds: with Active Directory sign-in, the
-    password people type into the login form is their WINDOWS DOMAIN
-    PASSWORD. Without TLS that crosses the network in clear text on every
-    sign-in - readable by anyone who can see the traffic. It is not this
-    app's password that leaks, it is their bank network credential.
-
-    Run from an elevated PowerShell prompt.
-
-.PARAMETER SiteName
-    IIS site to create or update. Defaults to QlikAI.
-
-.PARAMETER HostName
-    The name people will type. Must match the certificate, and must resolve
-    in DNS to this machine.
-
-.PARAMETER CertificateThumbprint
-    An existing certificate in LocalMachine\My. Get it with:
-        Get-ChildItem Cert:\LocalMachine\My | Format-List Subject, Thumbprint
-    Omit it and use -SelfSigned to make one for testing.
-
-.PARAMETER SelfSigned
-    Create a self-signed certificate instead. For TESTING ONLY - every
-    browser will warn, and a warning people are taught to click through is
-    worse than no padlock at all.
-
-.PARAMETER AppPort
-    Where Qlik AI is listening. Defaults to 8000.
-
-.EXAMPLE
-    .\setup-iis.ps1 -HostName qlikai.bank.internal `
-                    -CertificateThumbprint A1B2C3D4E5F6...
-
-.EXAMPLE
-    .\setup-iis.ps1 -HostName qlikai.bank.internal -SelfSigned
-#>
-
 [CmdletBinding()]
 param(
     [string] $SiteName = "QlikAI",
@@ -68,10 +22,6 @@ function Assert-Administrator {
 Assert-Administrator
 Import-Module WebAdministration -ErrorAction Stop
 
-# ----------------------------------------------------------------------
-# The two IIS pieces that are separate downloads
-# ----------------------------------------------------------------------
-
 $missing = @()
 if (-not (Get-WebGlobalModule -Name "RewriteModule" -ErrorAction SilentlyContinue)) {
     $missing += "URL Rewrite 2.1  ->  https://www.iis.net/downloads/microsoft/url-rewrite"
@@ -91,10 +41,6 @@ install URL Rewrite first.
 "@
 }
 Write-Host "URL Rewrite and ARR are present." -ForegroundColor Green
-
-# ----------------------------------------------------------------------
-# The certificate
-# ----------------------------------------------------------------------
 
 if ($SelfSigned) {
     if ($CertificateThumbprint) {
@@ -143,29 +89,17 @@ if ($cert.NotAfter -lt (Get-Date).AddDays(30)) {
 }
 Write-Host "Using certificate: $($cert.Subject)  (expires $($cert.NotAfter.ToString('yyyy-MM-dd')))"
 
-# ----------------------------------------------------------------------
-# Turn IIS into a proxy
-# ----------------------------------------------------------------------
-
-# Off by default, and nothing forwards anywhere until it is on.
 Set-WebConfigurationProperty -PSPath "MACHINE/WEBROOT/APPHOST" `
     -Filter "system.webServer/proxy" -Name "enabled" -Value "True"
 
-# THE setting that breaks the assistant if it is wrong. The chat replies
-# stream as server-sent events; ARR buffers responses by default, so the
-# whole answer would arrive at once after a minute of apparently nothing
-# happening - which reads as the model being hung.
 Set-WebConfigurationProperty -PSPath "MACHINE/WEBROOT/APPHOST" `
     -Filter "system.webServer/proxy" -Name "responseBufferThreshold" -Value 0
 
-# Leave the app's own Location headers alone; it only ever redirects to its
-# own relative paths.
 Set-WebConfigurationProperty -PSPath "MACHINE/WEBROOT/APPHOST" `
     -Filter "system.webServer/proxy" -Name "reverseRewriteHostInResponseHeaders" -Value "False"
 
 Write-Host "ARR proxy enabled, response buffering off." -ForegroundColor Green
 
-# The rewrite rule sets these, so they have to be allowed first.
 foreach ($variable in @("HTTP_X_FORWARDED_FOR", "HTTP_X_FORWARDED_PROTO")) {
     $existing = Get-WebConfiguration -PSPath "MACHINE/WEBROOT/APPHOST" `
         -Filter "system.webServer/rewrite/allowedServerVariables/add[@name='$variable']" `
@@ -176,10 +110,6 @@ foreach ($variable in @("HTTP_X_FORWARDED_FOR", "HTTP_X_FORWARDED_PROTO")) {
             -Value @{ name = $variable }
     }
 }
-
-# ----------------------------------------------------------------------
-# The site
-# ----------------------------------------------------------------------
 
 New-Item -ItemType Directory -Force -Path $SitePath | Out-Null
 
@@ -192,22 +122,15 @@ if (-not (Get-Website -Name $SiteName -ErrorAction SilentlyContinue)) {
     Write-Host "Site $SiteName already exists - reconfiguring it"
 }
 
-# HTTPS binding, with the certificate attached.
 if (-not (Get-WebBinding -Name $SiteName -Protocol https -ErrorAction SilentlyContinue)) {
     New-WebBinding -Name $SiteName -Protocol https -Port 443 -HostHeader $HostName -SslFlags 1
 }
 $binding = Get-WebBinding -Name $SiteName -Protocol https
 $binding.AddSslCertificate($CertificateThumbprint, "My")
 
-# Plain HTTP on 80, only so it can redirect to HTTPS. Somebody will type the
-# address without the scheme, and a connection refused is a support ticket.
 if (-not (Get-WebBinding -Name $SiteName -Protocol http -ErrorAction SilentlyContinue)) {
     New-WebBinding -Name $SiteName -Protocol http -Port 80 -HostHeader $HostName
 }
-
-# ----------------------------------------------------------------------
-# web.config: the forwarding itself
-# ----------------------------------------------------------------------
 
 $webConfig = @"
 <?xml version="1.0" encoding="UTF-8"?>
@@ -279,8 +202,6 @@ $webConfig = @"
 $configPath = Join-Path $SitePath "web.config"
 Set-Content -Path $configPath -Value $webConfig -Encoding UTF8
 Write-Host "Wrote $configPath"
-
-# ----------------------------------------------------------------------
 
 New-NetFirewallRule -DisplayName "Qlik AI HTTPS" -Direction Inbound `
     -Protocol TCP -LocalPort 443 -Action Allow -ErrorAction SilentlyContinue | Out-Null

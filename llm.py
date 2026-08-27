@@ -1,40 +1,3 @@
-"""The model behind the assistant, wherever it happens to live.
-
-Everything above this module calls one object with three methods - `chat`,
-`list` and `show` - and that object was the `ollama` package's client. This
-adds a second implementation of the same three methods that speaks the
-OpenAI `/v1/chat/completions` format, so the same assistant runs against
-OpenAI, Azure OpenAI, OpenRouter, Together, Groq, or a vLLM or TGI endpoint
-inside the bank's own network. They all speak that format; what differs is a
-base URL and a key.
-
-The shape it has to match is Ollama's, not OpenAI's, because Ollama's is what
-`chat_tools.py` already reads:
-
-    response["message"]["content"]
-    response["message"]["tool_calls"] -> [{"function": {"name", "arguments"}}]
-
-so the translation happens here rather than being sprayed through the agent
-loop. Three differences carry all the work:
-
-- **Tool call ids.** OpenAI pairs each call with an id and expects the
-  result to quote it. Ollama has no ids and matches by position. Outgoing
-  messages therefore have ids invented for them, and the tool results that
-  follow are matched back to the call they answer.
-- **Arguments are a string.** OpenAI sends the arguments as a JSON *string*;
-  Ollama sends a dict. `_parse_arguments` in chat_tools already accepts
-  either, so incoming calls are passed through as they arrive.
-- **Streaming tool calls arrive in fragments.** OpenAI streams a tool call
-  a few characters at a time across many chunks. The agent loop expects
-  whole calls, the way Ollama sends them, so they are accumulated here and
-  emitted once at the end.
-
-Why this matters beyond running somewhere else: readiness.md records the
-assistant getting its own arithmetic wrong (R1) and taking four minutes to
-answer (O1). Both are consequences of a small quantised model on a shared
-GPU, and neither is fixed by prompting.
-"""
-
 import json
 import logging
 import threading
@@ -63,29 +26,11 @@ log = logging.getLogger(__name__)
 OLLAMA = "ollama"
 OPENAI = "openai"
 
-# Reasoning models think out loud before answering. Ollama keeps that apart
-# from the reply on its own; an OpenAI-compatible endpoint does one of two
-# things instead, and neither is handled by anything above this module:
-#
-#   - a `reasoning_content` field alongside `content` (DashScope, and vLLM
-#     started with a reasoning parser), which is simply ignored here, or
-#   - `<think>...</think>` inline in `content` (vLLM without one), which
-#     would otherwise be shown to the user as part of the answer.
-#
-# Qwen3 does this by default, and the monologue is long: several hundred
-# words of "the user is asking about deposits, let me consider..." in front
-# of every reply, and worse, in front of the JSON that the dashboard designer
-# has to parse.
 THINK_OPEN = "<think>"
 THINK_CLOSE = "</think>"
 
 
 def strip_thinking(text):
-    """Remove any complete <think>...</think> blocks from a finished reply.
-
-    An unterminated block - a reply cut off mid-thought - is dropped from the
-    open tag onwards, because whatever follows it never arrived.
-    """
     if not text or THINK_OPEN not in text:
         return text
 
@@ -103,20 +48,11 @@ def strip_thinking(text):
 
 
 class ThinkFilter:
-    """Drop the monologue from a stream, where the tags arrive in pieces.
-
-    A token boundary can fall anywhere, including the middle of `<think>`,
-    so text is held back until it is known not to be the start of a tag.
-    That costs a few characters of latency at the tail of each chunk and is
-    the only way to avoid emitting half an opening tag to the browser.
-    """
-
     def __init__(self):
         self._buffer = ""
         self._inside = False
 
     def feed(self, text):
-        """The part of `text` that is really the answer, so far."""
         self._buffer += text
         out = []
 
@@ -124,8 +60,6 @@ class ThinkFilter:
             if self._inside:
                 index = self._buffer.find(THINK_CLOSE)
                 if index == -1:
-                    # Still thinking. Keep only enough to recognise a closing
-                    # tag split across this chunk and the next.
                     self._buffer = self._buffer[-(len(THINK_CLOSE) - 1):]
                     break
                 self._buffer = self._buffer[index + len(THINK_CLOSE):]
@@ -147,9 +81,7 @@ class ThinkFilter:
         return "".join(out)
 
     def flush(self):
-        """Whatever is left once the stream ends."""
         if self._inside:
-            # The reply stopped mid-thought; there is no answer in there.
             self._buffer = ""
             return ""
         tail, self._buffer = self._buffer, ""
@@ -157,8 +89,6 @@ class ThinkFilter:
 
 
 class OpenAICompatibleClient:
-    """An Ollama-shaped client over the OpenAI chat-completions API."""
-
     def __init__(self, base_url=None, api_key=None, timeout=None,
                  organisation=None, extra_headers=None, verify=None,
                  default_model=None, connect_timeout=None):
@@ -178,21 +108,13 @@ class OpenAICompatibleClient:
 
         verify = OPENAI_VERIFY_SSL if verify is None else verify
         if not verify:
-            # An internal endpoint behind the bank's own CA. Worth saying out
-            # loud: the server is no longer authenticated, so this is for a
-            # network you already trust, not for the open internet.
             log.warning(
                 "OPENAI_VERIFY_SSL is off - the model endpoint's certificate "
                 "is not being verified."
             )
 
-        # One pool, sized for the number of turns that can run at once. Left
-        # at httpx's default the pool itself becomes the queue: turns wait on
-        # a free connection rather than on the model, which looks like the
-        # model being slow.
         self._http = httpx.Client(
             headers=headers, verify=verify,
-            # connect short, read long - see OPENAI_CONNECT_TIMEOUT.
             timeout=httpx.Timeout(self.timeout, connect=self.connect_timeout),
             limits=httpx.Limits(
                 max_connections=LLM_MAX_CONNECTIONS,
@@ -203,21 +125,10 @@ class OpenAICompatibleClient:
     def close(self):
         self._http.close()
 
-    # ------------------------------------------------------------------
-    # Translation
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _to_openai_messages(messages):
-        """Ollama's message list as OpenAI wants it.
-
-        Tool results are matched to the call they answer: OpenAI rejects a
-        `tool` message whose `tool_call_id` names no preceding call, and
-        Ollama's format carries only a name, so the pairing is rebuilt from
-        the order the calls were made in.
-        """
         out = []
-        pending = []          # ids of calls not yet answered, in order
+        pending = []
 
         for message in messages:
             role = message.get("role")
@@ -231,9 +142,6 @@ class OpenAICompatibleClient:
                         pending.pop(index)
                         break
                 if call_id is None and pending:
-                    # Named something we never called - answer the oldest
-                    # outstanding one rather than dropping the result, which
-                    # would leave the model waiting for it forever.
                     call_id = pending.pop(0)[0]
                 out.append({
                     "role": "tool",
@@ -260,8 +168,6 @@ class OpenAICompatibleClient:
                     })
                 out.append({
                     "role": "assistant",
-                    # None rather than "": some endpoints reject an empty
-                    # string alongside tool calls.
                     "content": message.get("content") or None,
                     "tool_calls": converted,
                 })
@@ -273,7 +179,6 @@ class OpenAICompatibleClient:
 
     @staticmethod
     def _from_openai_calls(calls):
-        """OpenAI tool calls in the shape the agent loop reads."""
         plain = []
         for call in calls or []:
             function = call.get("function") or {}
@@ -281,9 +186,6 @@ class OpenAICompatibleClient:
                 "id": call.get("id"),
                 "function": {
                     "name": function.get("name") or "",
-                    # Left as the string it arrived as: _parse_arguments
-                    # accepts either, and re-parsing here would only move
-                    # where a malformed argument list is discovered.
                     "arguments": function.get("arguments") or "{}",
                 },
             })
@@ -291,12 +193,6 @@ class OpenAICompatibleClient:
 
     @staticmethod
     def _payload_options(options):
-        """Ollama's `options` as OpenAI parameters.
-
-        `num_ctx` has no equivalent and is dropped on purpose: the context
-        window is the endpoint's property, not the caller's, and a hosted
-        model's is far larger than anything this would ask for.
-        """
         options = options or {}
         payload = {}
         if "temperature" in options:
@@ -309,10 +205,6 @@ class OpenAICompatibleClient:
             payload["seed"] = options["seed"]
         return payload
 
-    # ------------------------------------------------------------------
-    # The three methods everything above expects
-    # ------------------------------------------------------------------
-
     def chat(self, model=None, messages=None, tools=None, options=None,
              stream=False, **_ignored):
         body = {
@@ -323,11 +215,6 @@ class OpenAICompatibleClient:
         }
         if tools:
             body["tools"] = tools
-        # Whatever a particular endpoint wants that is not in the standard:
-        # Qwen served by vLLM or DashScope takes
-        # {"chat_template_kwargs": {"enable_thinking": false}}, which stops
-        # the monologue being generated at all rather than stripping it after
-        # the fact - cheaper and faster than paying for tokens nobody reads.
         body.update(OPENAI_EXTRA_BODY)
 
         if stream:
@@ -339,9 +226,6 @@ class OpenAICompatibleClient:
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
 
-        # `reasoning_content` is the monologue kept in a field of its own by
-        # endpoints that separate it. Useful when something goes wrong, never
-        # part of the answer.
         thinking = message.get("reasoning_content")
         if thinking:
             log.debug("Model reasoning (%d chars) discarded", len(thinking))
@@ -373,13 +257,6 @@ class OpenAICompatibleClient:
             ) from e
 
     def _stream(self, body):
-        """Yield Ollama-shaped chunks, with whole tool calls at the end.
-
-        OpenAI streams a tool call in fragments - the name in one chunk, the
-        arguments a few characters at a time across many more. The agent loop
-        expects whole calls, so they are assembled here and emitted once the
-        stream finishes.
-        """
         building = {}
         thinking = ThinkFilter()
         try:
@@ -406,9 +283,6 @@ class OpenAICompatibleClient:
 
                     text = delta.get("content")
                     if text:
-                        # Held back a few characters at a time, because a
-                        # token boundary can fall inside "<think>" and half
-                        # an opening tag must never reach the browser.
                         visible = thinking.feed(text)
                         if visible:
                             yield {"message": {"role": "assistant",
@@ -442,13 +316,6 @@ class OpenAICompatibleClient:
         }
 
     def list(self):
-        """Models the endpoint offers, in the shape describe_models reads.
-
-        An endpoint that does not implement /v1/models - several
-        self-hosted ones serve exactly one model and skip it - still has to
-        produce a usable answer, so the configured model is reported rather
-        than an empty picker that looks like a fault.
-        """
         try:
             response = self._http.get(f"{self.base_url}/models")
             response.raise_for_status()
@@ -469,19 +336,7 @@ class OpenAICompatibleClient:
         return {"models": models}
 
     def show(self, model):
-        """Capabilities, which this API has no way to report.
-
-        Ollama can say whether a model supports tool calling without loading
-        it, and `pick_tool_model` uses that to avoid choosing one that will
-        return a 400 on the first tool call. A hosted endpoint offers no such
-        introspection, so tool support is assumed - which is right for every
-        model anyone would put behind this, and wrong loudly rather than
-        silently if it isn't: the first call fails with the provider's own
-        error rather than the model quietly ignoring the tools.
-        """
         return {"capabilities": ["completion", "tools"]}
-
-    # ------------------------------------------------------------------
 
     def _unreachable(self, error):
         return (
@@ -511,34 +366,18 @@ class OpenAICompatibleClient:
         return f"The model endpoint returned {response.status_code}. {detail}"
 
 
-# ----------------------------------------------------------------------
-
-
 def provider():
-    """Which client the configuration asks for."""
     name = (LLM_PROVIDER or OLLAMA).strip().lower()
     if name in ("openai", "openai-compatible", "openrouter", "azure", "vllm"):
         return OPENAI
     return OLLAMA
 
 
-# One HTTP client for the whole process rather than one per person.
-#
-# Sessions are per user, and a client per session would mean a connection
-# pool per user - hundreds of separate pools, each paying its own TLS
-# handshake and none of them reusing a connection anybody else opened. The
-# client itself holds no per-user state: the key and the model are the same
-# for everyone, and which model to use is passed on every call.
 _shared_lock = threading.Lock()
 _shared_client = None
 
 
 def build_client():
-    """The client the rest of the app talks to.
-
-    Imported lazily so a deployment using a hosted endpoint does not need the
-    ollama package installed, and the reverse.
-    """
     global _shared_client
 
     if provider() == OPENAI:
@@ -555,12 +394,10 @@ def build_client():
 
     import ollama
 
-    # Ollama's own client is cheap and local; there is nothing to share.
     return ollama.Client(host=OLLAMA_HOST or None)
 
 
 def close_shared():
-    """Close the shared pool on shutdown. Safe to call more than once."""
     global _shared_client
 
     with _shared_lock:
@@ -573,7 +410,6 @@ def close_shared():
 
 
 def default_model():
-    """The model to start from, whichever provider is configured."""
     if provider() == OPENAI:
         return OPENAI_MODEL
     from config import CHAT_MODEL

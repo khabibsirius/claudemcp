@@ -1,10 +1,3 @@
-"""Spec validation - the layer that stops hallucinated fields reaching Qlik.
-
-Qlik accepts a chart referencing a field that doesn't exist: it creates the
-object and renders an empty box. Every check here exists because the failure
-it prevents is silent.
-"""
-
 import pytest
 
 from dashboard_builder import (
@@ -53,12 +46,9 @@ class TestNormalization:
         assert viz(dimension="[Customer Segment]")["dimension"] == "Customer Segment"
 
     def test_bracketed_measure_is_unwrapped(self):
-        """Left bracketed, the Sum([...]) fallback would build Sum([[Sales]])."""
         assert viz(type="kpi", measure="[Sales]")["measure"] == "Sales"
 
     def test_kpi_dimension_is_dropped(self):
-        """A KPI is one aggregate with no grouping; a dimension would turn it
-        into a one-column table."""
         assert viz(type="kpi", dimension="Region")["dimension"] is None
 
     def test_type_is_lowercased(self):
@@ -71,8 +61,6 @@ class TestEffectiveExpression:
         assert effective_expression(viz()) == "Sum([Sales])"
 
     def test_falls_back_to_sum_of_the_measure(self):
-        """Mirrors QlikEngine.create_chart, so validation checks what will
-        actually be sent rather than what was written down."""
         assert effective_expression(viz(measure_expression="")) == "Sum([Sales])"
 
     def test_empty_when_there_is_nothing_to_aggregate(self):
@@ -94,8 +82,6 @@ class TestVisualizationValidation:
         )
 
     def test_scatter_is_a_real_type_now_but_needs_two_measures(self):
-        """It used to be rejected as unknown. It exists, and the reason it
-        never worked is that it needs two measures."""
         error = validate_visualization(viz(type="scatter"), FIELDS)
         assert "needs 2 measures" in error
 
@@ -111,8 +97,6 @@ class TestVisualizationValidation:
         assert "unknown field" in error
 
     def test_accepts_a_bracketed_dimension_that_is_real(self):
-        """Normalization has to run before the field check, or a correct
-        field name fails purely because the model bracketed it."""
         assert validate_visualization(viz(dimension="[Customer Segment]"), FIELDS) is None
 
     def test_dimensional_charts_need_a_dimension(self):
@@ -146,14 +130,6 @@ class TestVisualizationValidation:
 
 
 class TestKpiValidationRegression:
-    """A KPI with no measure_expression used to skip validation entirely.
-
-    The guard read `if viz_type != "kpi" or viz.get("measure_expression")`,
-    which is falsy for exactly that case - so the spec went straight to Qlik,
-    where create_chart built Sum([<unchecked field>]) and produced a silently
-    blank KPI.
-    """
-
     def test_kpi_without_expression_is_still_field_checked(self):
         spec = viz(type="kpi", measure="Revenue", measure_expression="")
         error = validate_visualization(spec, FIELDS)

@@ -1,19 +1,3 @@
-"""Smoke test: is everything this needs actually reachable?
-
-    python check_connection.py
-    python check_connection.py --ldap-user jsmith    # test a real sign-in
-
-Run this first when something isn't working, and run it before go-live. It
-checks each dependency separately so you find out *which* one is broken,
-rather than watching the whole pipeline fail at once.
-
-Four things, because there are now four ways a deployment fails on its first
-morning: Qlik, the model endpoint, Active Directory, and the accounts
-database. The model check costs a handful of tokens - it asks for one tool
-call, because "the endpoint answers" and "this model can drive the
-assistant" are different questions and only the second one matters.
-"""
-
 import argparse
 import getpass
 
@@ -38,8 +22,6 @@ FAIL = " FAIL  "
 
 
 def check_qlik():
-    """Connect, list apps, open the configured one, read its fields."""
-
     try:
         engine = QlikEngine()
     except QlikEngineError as e:
@@ -84,9 +66,6 @@ def check_qlik():
             print(f"{FAIL} Listing sheets\n        {e}")
             return False
 
-    # Outside the `with`, so this socket has let go of the app it opened.
-    # Changing app depends on exactly that, which is why the check comes
-    # after rather than inside.
     if not check_switching(names):
         print("        ^ this is what stops the App picker changing app.")
 
@@ -94,17 +73,6 @@ def check_qlik():
 
 
 def check_switching(names):
-    """Change app the way the App picker does.
-
-    Qlik Sense Desktop keeps ONE app open per engine and offers no way to
-    close one - the app is freed when the session holding it disconnects, so
-    changing app means a new session. This walks session.open_app, which is
-    the path the web UI and the MCP tools both take, because holding the
-    connection across a switch is what used to make the app unchangeable.
-
-    A failure here with another app named is usually a second client - a
-    running web_app.py, or the Qlik Sense window sitting inside an app.
-    """
     others = [name for name in names if name != APP_NAME]
     if not others:
         print(f"{OK} Only one app on this Qlik - nothing to switch to")
@@ -126,10 +94,6 @@ def check_switching(names):
     return True
 
 
-# ----------------------------------------------------------------------
-# The model
-# ----------------------------------------------------------------------
-
 PROBE_TOOL = [{
     "type": "function",
     "function": {
@@ -141,14 +105,6 @@ PROBE_TOOL = [{
 
 
 def check_model():
-    """Can the configured model actually drive the assistant?
-
-    Two different questions, and only the second one matters: an endpoint
-    that answers is not the same as a model that will call a tool. The
-    assistant is a tool-calling loop, so a model that ignores tools produces
-    a fluent paragraph and builds nothing - which reads as the product being
-    broken rather than as the wrong model being configured.
-    """
     if llm.provider() == llm.OLLAMA:
         try:
             print(f"{OK} {OllamaClient(OLLAMA_MODEL).check()}")
@@ -167,8 +123,6 @@ def check_model():
         names = [m["model"] for m in client.list().get("models", []) if m.get("model")]
         print(f"{OK} Model endpoint answered: {len(names)} model(s) offered")
         if names and OPENAI_MODEL not in names:
-            # Not fatal - plenty of endpoints list nothing useful - but it is
-            # the commonest cause of a 404 on the first question anybody asks.
             print(f"        note: {OPENAI_MODEL!r} is not in the list; "
                   f"first few are {', '.join(names[:5])}")
     except OllamaError as e:
@@ -179,7 +133,6 @@ def check_model():
 
 
 def _check_tool_calling(client):
-    """One tiny call, asking the model to use a tool. Costs a few tokens."""
     try:
         response = client.chat(
             model=OPENAI_MODEL,
@@ -203,12 +156,7 @@ def _check_tool_calling(client):
     return False
 
 
-# ----------------------------------------------------------------------
-# Sign-in
-# ----------------------------------------------------------------------
-
 def check_directory():
-    """Active Directory, when sign-in is delegated to it."""
     if not directory.enabled():
         print(f"{OK} Sign-in is local to this server (LDAP_ENABLED is off)")
         return True
@@ -216,16 +164,11 @@ def check_directory():
     print(f"{OK} Directory configured: {directory.summary()}")
 
     if not LDAP_BIND_USER:
-        # Without a service account there is nothing to bind as until
-        # somebody types a password, so say so rather than implying it was
-        # tested. --ldap-user is how you actually test it.
         print("        no LDAP_BIND_USER set, so nothing was bound - run with "
               "--ldap-user NAME to test a real sign-in")
         return True
 
     try:
-        # A blank password is refused before the network, by design, so this
-        # proves reachability rather than credentials.
         directory.authenticate(LDAP_BIND_USER, None)
     except directory.DirectoryError as e:
         print(f"{FAIL} Reaching the directory\n        {e}")
@@ -236,7 +179,6 @@ def check_directory():
 
 
 def check_user_sign_in(username):
-    """Prove one real person can sign in. The go-live check."""
     if not directory.enabled():
         print(f"{FAIL} --ldap-user needs LDAP_ENABLED=true")
         return False
@@ -265,7 +207,6 @@ def check_user_sign_in(username):
 
 
 def check_accounts():
-    """The accounts database, and the thing that silently costs you speed."""
     try:
         users.connect()
         people = users.listing()
@@ -287,9 +228,6 @@ def check_accounts():
               "controller is unreachable.")
 
     if QLIK_MODE == ENTERPRISE:
-        # The invisible queue: on Enterprise, anyone without a Qlik identity
-        # falls back to the shared connection AND the global lock, so they
-        # serialise against each other and nothing on screen says why.
         missing = [u["username"] for u in people
                    if u["active"] and not (u["qlik_directory"] and u["qlik_user_id"])]
         if missing:
@@ -303,11 +241,8 @@ def check_accounts():
     return True
 
 
-# ----------------------------------------------------------------------
-
-
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description="Smoke test: is everything this needs actually reachable?")
     parser.add_argument(
         "--ldap-user", metavar="NAME",
         help="prove one real person can sign in; prompts for their password")

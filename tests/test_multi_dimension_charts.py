@@ -1,13 +1,3 @@
-"""Charts that need more than one dimension or measure.
-
-Asking for a sankey chart failed four times in a row. Not because the type
-was missing - it was there, with the right properties - but because the only
-chart-building tool the assistant had was build_dashboard, whose spec carries
-exactly one dimension and one measure per chart. A sankey needs two to five
-dimensions, so it could not be expressed at all, and the design pipeline
-quietly substituted bar charts each time.
-"""
-
 import pytest
 
 import chat_tools
@@ -64,9 +54,6 @@ class TestTheGapThatCausedIt:
         "qlik-network-chart",
     ])
     def test_a_single_dimension_spec_for_one_is_rejected(self, chart_type):
-        """The regression: min_dims was unpacked and never enforced, so
-        these passed validation with one dimension and built charts that
-        rendered blank - the exact failure the measure check prevents."""
         from dashboard_builder import normalize_visualization, validate_visualization
 
         viz = normalize_visualization({
@@ -80,9 +67,6 @@ class TestTheGapThatCausedIt:
         assert "create_chart" in error, "the fix must name a tool that works"
 
     def test_the_design_prompt_does_not_offer_what_it_cannot_build(self):
-        """The regression: the 'you may also use' list named mekkochart and
-        qlik-sankey-chart-ext two rules above the rule forbidding exactly
-        those - and distributionplot, which is not a buildable type at all."""
         from prompts import DASHBOARD_SYSTEM_PROMPT
 
         offered = DASHBOARD_SYSTEM_PROMPT.split("Do NOT use")[0]
@@ -99,8 +83,6 @@ class TestCreateChartTool:
         assert "create_chart" in names
 
     def test_the_assistant_can_use_it(self):
-        """The previous advice pointed at qlik_build_sheet, which is an MCP
-        tool the chatbot does not have - so it was unfollowable."""
         assert "create_chart" in web_app.ASSISTANT_TOOLS
 
     def test_it_passes_every_dimension_through(self):
@@ -133,8 +115,6 @@ class TestCreateChartTool:
         assert engine.sheets == ["My sheet"]
 
     def test_an_existing_sheet_name_adds_to_it(self):
-        """The regression: "add it to the Full Dashboard sheet" made a second
-        sheet with the same name, so the chart was nowhere the person looked."""
         engine = RecordingEngine(existing_sheets=["Full Dashboard"])
 
         chat_tools.create_chart(
@@ -147,8 +127,6 @@ class TestCreateChartTool:
         assert engine.sheets == [], "created a duplicate sheet"
 
     def test_an_ambiguous_name_does_not_create_yet_another(self):
-        """Two sheets share a name, so open_sheet refuses. Treating that as
-        "not there" and creating a third made it worse on every attempt."""
         class Ambiguous(RecordingEngine):
             def open_sheet(self, name_or_id):
                 raise QlikEngineError(f"2 sheets are called {name_or_id!r}")
@@ -162,7 +140,6 @@ class TestCreateChartTool:
         assert engine.sheets == []
 
     def test_it_starts_a_sheet_when_there_is_none(self):
-        """Otherwise the first chart of a session has nowhere to go."""
         engine = RecordingEngine()
         chat_tools.create_chart(
             engine, "piechart", "P", dimensions=["Region"], measures=["Sum([SUM])"]
@@ -198,7 +175,6 @@ class TestCreateChartTool:
 class TestAdviceIsFollowable:
 
     def test_the_rejection_message_names_a_tool_the_assistant_has(self):
-        """It used to say "use qlik_build_sheet", which does not exist here."""
         from dashboard_builder import normalize_visualization, validate_visualization
 
         viz = normalize_visualization({
@@ -225,9 +201,6 @@ class TestAdviceIsFollowable:
 
 
 class TestSheetAttribution:
-    """"Which sheet is that chart on?" had no answer: a chart's properties
-    say nothing about where it lives, only the sheet's `cells` list does."""
-
     def test_list_charts_reports_the_sheet(self, engine):
         engine.ws.handlers = {
             "CreateSessionObject": {"qReturn": {"qHandle": 7, "qGenericId": "OBJ"}},
@@ -251,7 +224,6 @@ class TestSheetAttribution:
         assert charts[0]["sheet_id"] == "SH_1"
 
     def test_a_chart_on_no_sheet_is_reported_as_such(self, engine):
-        """An object can exist in the app while being invisible in Qlik."""
         engine.ws.handlers = {
             "CreateSessionObject": {"qReturn": {"qHandle": 7, "qGenericId": "OBJ"}},
             "GetLayout": {"qLayout": {"qAppObjectList": {"qItems": []}}},
@@ -269,14 +241,6 @@ class TestSheetAttribution:
 
 
 class TestEmptyChartsAreRefused:
-    """The reported failure: "it made dashboards but some were empty".
-
-    create_chart validated nothing. Ask for a pie chart and forget the
-    measure and it built one, saved it, and returned {"created": ...} - so
-    the model told the user it had worked. The app grew charts that render
-    nothing, and nobody found out until someone opened the sheet.
-    """
-
     def _engine(self):
         engine = RecordingEngine()
         engine.get_fields = lambda: [{"name": "Region"}, {"name": "SUM"}]
@@ -304,7 +268,6 @@ class TestEmptyChartsAreRefused:
         assert engine.charts == []
 
     def test_the_reason_names_what_to_fix(self):
-        """A bare refusal makes a model give up; a reason makes it retry."""
         engine = self._engine()
         error = chat_tools.create_chart(
             engine, "piechart", "Deposits", dimensions=["Region"],
@@ -341,7 +304,6 @@ class TestEmptyChartsAreRefused:
         assert engine.charts == []
 
     def test_a_valid_chart_still_gets_built(self):
-        """The guard must not become the reason nothing can be created."""
         engine = self._engine()
         result = chat_tools.create_chart(
             engine, "barchart", "Deposits by region", dimensions=["Region"],
@@ -353,8 +315,7 @@ class TestEmptyChartsAreRefused:
         assert engine.saved == 1
 
     def test_validation_survives_an_engine_that_cannot_answer(self):
-        """Field lookup failing is not a reason to refuse a good chart."""
-        engine = RecordingEngine()   # no get_fields, no check_expression
+        engine = RecordingEngine()
 
         result = chat_tools.create_chart(
             engine, "barchart", "Deposits", dimensions=["Region"],

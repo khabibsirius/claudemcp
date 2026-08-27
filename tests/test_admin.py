@@ -1,11 +1,3 @@
-"""The administrator's console: accounts, everyone's chats, and the trail.
-
-The powers here are deliberately broad - manage users, read any conversation,
-stand in for somebody to reproduce what they are seeing. What keeps that
-honest is not that it is hard to do, but that it is all recorded and that a
-borrowed identity is visibly a borrowed identity.
-"""
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -87,13 +79,8 @@ def console(boss):
 
 
 def wrote(action):
-    """Whether an action reached the audit trail."""
     return [e for e in users.audit_trail(limit=500) if e["action"] == action]
 
-
-# ----------------------------------------------------------------------
-# Accounts
-# ----------------------------------------------------------------------
 
 class TestManagingUsers:
 
@@ -164,15 +151,12 @@ class TestManagingUsers:
         assert "signed in as" in response.json()["detail"]
 
     def test_the_last_administrator_is_protected(self, console, boss):
-        """The account that could undo it is the one being changed."""
         response = console.patch(f"/api/admin/users/{boss['id']}",
                                  json={"role": "user"})
         assert response.status_code == 400
         assert "only active administrator" in response.json()["detail"]
 
     def test_deleting_a_user_keeps_their_conversations(self, console, member):
-        """A personnel change is not a decision to destroy the record of what
-        was asked of a bank's data."""
         sess = session.for_user(member)
         sess.reset_chat()
         sess.messages().append({"role": "user", "content": "what is our exposure?"})
@@ -195,10 +179,6 @@ class TestManagingUsers:
 
 
 class TestTheConsoleShowsWhereAPasswordLives:
-    """An administrator looking at the page could not tell an Active
-    Directory account from a local one, while the command line could - and
-    it is the first thing to check when somebody cannot sign in."""
-
     def test_the_listing_says_which_accounts_come_from_the_directory(
             self, console, member):
         users.from_directory({"username": "bcooper", "display_name": "B Cooper",
@@ -217,8 +197,6 @@ class TestTheConsoleShowsWhereAPasswordLives:
         assert console.get("/api/admin/users").json()["directory_sign_in"] is True
 
     def test_a_directory_account_has_no_local_password_to_reset(self, console):
-        """The button is hidden on the page; this is the same rule in the
-        store, so a script cannot do what the page will not."""
         user = users.from_directory({"username": "bcooper", "display_name": "B",
                                      "groups": []}, ("BANK", "bcooper"))
         assert users.authenticate("bcooper", "") is None
@@ -233,7 +211,6 @@ class TestMcpTokens:
         token = response.json()["token"]
         assert users.by_token(token)["username"] == "jsmith"
 
-        # And is not readable afterwards - only whether one exists.
         listed = [u for u in console.get("/api/admin/users").json()["users"]
                   if u["username"] == "jsmith"][0]
         assert listed["has_token"] is True
@@ -244,10 +221,6 @@ class TestMcpTokens:
         console.delete(f"/api/admin/users/{member['id']}/token")
         assert users.by_token(token) is None
 
-
-# ----------------------------------------------------------------------
-# Other people's conversations
-# ----------------------------------------------------------------------
 
 class TestReadingConversations:
 
@@ -287,8 +260,6 @@ class TestReadingConversations:
             "what is our exposure?", "About 4.2bn."]
 
     def test_reading_one_is_itself_recorded(self, console, member, a_conversation):
-        """The people whose questions these are cannot see this page, so the
-        only thing keeping it honest is that looking leaves a mark."""
         owner = history.owner_key(member["id"])
         console.get(f"/api/admin/chats/{owner}/{a_conversation}")
 
@@ -301,7 +272,6 @@ class TestReadingConversations:
     ])
     def test_an_owner_that_is_not_an_owner_is_refused(self, console, owner,
                                                       a_conversation):
-        """The owner arrives in a URL, so it is a path unless it is checked."""
         response = console.get(f"/api/admin/chats/{owner}/{a_conversation}")
         assert response.status_code == 404
 
@@ -310,10 +280,6 @@ class TestReadingConversations:
         assert console.get(
             f"/api/admin/chats/{owner}/../../secrets").status_code in (404, 400)
 
-
-# ----------------------------------------------------------------------
-# Who is here
-# ----------------------------------------------------------------------
 
 class TestSessions:
 
@@ -342,10 +308,6 @@ class TestSessions:
                    for entry in qlik)
 
 
-# ----------------------------------------------------------------------
-# Standing in for somebody
-# ----------------------------------------------------------------------
-
 class TestActingAsAnotherUser:
 
     def test_it_puts_you_in_their_conversation(self, console, member):
@@ -368,9 +330,6 @@ class TestActingAsAnotherUser:
 
     def test_administration_is_refused_while_acting_as_somebody(self, console,
                                                                 member):
-        """A borrowed identity that quietly kept its own powers would be a
-        trap rather than a feature - and the point is to reproduce what that
-        person sees, which does not include this page."""
         console.post("/api/admin/act-as", json={"user_id": member["id"]})
 
         response = console.get("/api/admin/users")
@@ -394,8 +353,6 @@ class TestActingAsAnotherUser:
         assert wrote("act-as.stopped")
 
     def test_work_done_while_borrowed_names_both(self, console, member):
-        """"The admin did it as this user" and "this user did it" are
-        different events, and only one of them is the user's fault."""
         console.post("/api/admin/act-as", json={"user_id": member["id"]})
         console.post("/api/select", json={"app": "sales"})
 
@@ -421,19 +378,12 @@ class TestActingAsAnotherUser:
 
     def test_stopping_is_reachable_from_inside_a_borrowed_identity(
             self, console, member):
-        """The way out cannot require the powers you have just put down -
-        acting as an ordinary user is refused administrator's powers, so a
-        stop button behind that check could never be pressed."""
         console.post("/api/admin/act-as", json={"user_id": member["id"]})
         assert console.get("/api/admin/users").status_code == 403
 
         assert console.post("/api/admin/act-as",
                             json={"user_id": None}).status_code == 200
 
-
-# ----------------------------------------------------------------------
-# The trail
-# ----------------------------------------------------------------------
 
 class TestAuditTrail:
 
@@ -446,7 +396,6 @@ class TestAuditTrail:
         assert "jsmith" in wrote("login.failed")[0]["detail"]
 
     def test_rewriting_the_load_script_is_recorded(self, console, boss):
-        """It decides what every figure in the app is made of."""
         session.for_user(boss).open_app("sales")
         console.put("/api/script", json={"content": "///$tab Main\r\nTRACE x;\r\n"})
         assert wrote("script.saved")[0]["username"] == "boss"

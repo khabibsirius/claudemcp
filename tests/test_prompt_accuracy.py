@@ -1,12 +1,3 @@
-"""The assistant must not be told things that aren't true.
-
-A rule added to stop it inventing scatter plots said "the only chart types
-that exist are kpi, barchart, linechart, piechart and table". When 18 more
-types were added the rule stayed, so the assistant kept refusing to draw a
-bullet chart - correctly, according to what it had been told. Hand-maintained
-lists of generated data go stale; these tests make that fail loudly.
-"""
-
 import pytest
 
 from chart_specs import CHART_TYPES, describe_chart_types
@@ -21,8 +12,6 @@ class TestCatalogueIsGenerated:
             assert chart_type in catalogue, f"{chart_type} missing from the catalogue"
 
     def test_it_states_the_requirements(self):
-        """Knowing a scatter plot exists is useless without knowing it needs
-        two measures."""
         catalogue = describe_chart_types()
         assert "scatterplot (1 dimension, 2-3 measures)" in catalogue
         assert "gauge (no dimensions, 1 measure)" in catalogue
@@ -45,11 +34,9 @@ class TestSystemPromptTellsTheTruth:
         assert chart_type in SYSTEM_PROMPT
 
     def test_it_says_they_can_be_built(self):
-        """It refused a bullet chart outright rather than trying."""
         assert "you CAN build it" in SYSTEM_PROMPT
 
     def test_it_still_forbids_inventing_types(self):
-        """The original rule was right, just wrong about the list."""
         assert "do not invent one that is not there" in SYSTEM_PROMPT
 
     def test_everyday_names_are_offered(self):
@@ -58,8 +45,6 @@ class TestSystemPromptTellsTheTruth:
 
 
 class TestNoHandMaintainedTypeLists:
-    """Any place that spells the types out by hand will drift again."""
-
     STALE = "kpi, barchart, linechart, piechart, table"
 
     def test_the_prompt_has_no_frozen_list(self):

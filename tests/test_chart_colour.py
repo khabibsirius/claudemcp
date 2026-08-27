@@ -1,9 +1,3 @@
-"""Chart colours.
-
-Every chart came out the same teal because the colour block was hardcoded
-with `auto: true`. Asking for "red and blue charts" changed nothing at all.
-"""
-
 import pytest
 
 from chart_specs import COLOURS, MULTI_COLOUR, build_properties, resolve_colour
@@ -40,15 +34,12 @@ class TestResolveColour:
         assert resolve_colour(value) is None
 
     def test_no_pure_primaries(self):
-        """#ff0000 on a white sheet is painful to look at."""
         assert "#FF0000" not in COLOURS.values()
 
 
 class TestColourIsApplied:
 
     def test_auto_is_switched_off(self):
-        """With auto left on, Qlik picks its own colouring and ignores
-        everything else in the block - the setting appears to do nothing."""
         assert properties(colour="red")["color"]["auto"] is False
 
     def test_the_hex_reaches_the_palette(self):
@@ -67,7 +58,6 @@ class TestColourIsApplied:
         assert colour["paletteColor"] == {"index": 6}
 
     def test_expected_keys_survive_the_merge(self):
-        """The renderer reads these whether or not a colour was chosen."""
         colour = properties(colour="blue")["color"]
         for key in ("measureScheme", "dimensionScheme", "formatting", "autoMinMax"):
             assert key in colour
@@ -85,10 +75,6 @@ class TestColourIsApplied:
 
 
 class TestNestedColourPaths:
-    """Histogram, waterfall and boxplot read their colour from nested paths,
-    not the flat `color` block - so an explicit colour merged flat left the
-    stock colours in place and "make the histogram red" changed nothing."""
-
     def test_histogram_bars_take_the_colour(self):
         colour = properties("histogram", colour="red")["color"]
         assert colour["bar"]["paletteColor"] == {"index": -1, "color": COLOURS["red"]}
@@ -105,7 +91,6 @@ class TestNestedColourPaths:
         }
 
     def test_waterfall_falls_keep_their_red(self):
-        """Painting falls the same colour as rises hides which is which."""
         colour = properties("waterfallchart", colour="green")["color"]
         assert colour["negativeValue"]["paletteColor"]["color"] == "#cc6677"
 
@@ -115,8 +100,6 @@ class TestNestedColourPaths:
         assert colour["box"]["paletteColor"] == {"index": -1, "color": COLOURS["blue"]}
 
     def test_multi_keeps_the_default_on_a_single_series(self):
-        """A histogram has no dimension to colour by, so "multi" cannot be
-        expressed - the default is kept rather than a broken block written."""
         colour = properties("histogram", colour="multi")["color"]
         assert colour["bar"]["paletteColor"]["color"] == "#4477aa"
 
@@ -136,7 +119,6 @@ class TestSpecNormalisation:
         assert self.base(color="multi")["color"] == MULTI_COLOUR
 
     def test_a_nonsense_colour_is_dropped_not_fatal(self):
-        """A chart is still worth building if the model asks for vermilion."""
         assert self.base(color="vermilion")["color"] is None
 
     def test_no_colour_is_the_norm(self):

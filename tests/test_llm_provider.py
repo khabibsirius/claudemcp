@@ -1,12 +1,3 @@
-"""The OpenAI-compatible client, against a fake endpoint.
-
-The assistant reads Ollama's message shape, so everything here is about
-translation: three differences between the two APIs carry all the risk, and
-each of them fails silently rather than loudly if it is wrong.
-
-Nothing in this file touches a real endpoint or needs a key.
-"""
-
 import json
 
 import httpx
@@ -17,29 +8,22 @@ from ollama_client import OllamaError
 
 
 def fake_transport(handler):
-    """An httpx client whose requests are answered by `handler`."""
     return httpx.Client(transport=httpx.MockTransport(handler))
 
 
 @pytest.fixture
 def client(monkeypatch):
-    """A client with no network behind it until a test supplies one."""
     monkeypatch.setattr(llm, "OPENAI_API_KEY", "test-key")
     return llm.OpenAICompatibleClient(base_url="https://api.example.com/v1",
                                       api_key="test-key")
 
 
 def answer(client, body, status=200):
-    """Point the client at a canned JSON response and capture the request."""
     seen = {}
 
     def handler(request):
         seen["url"] = str(request.url)
         seen["headers"] = dict(request.headers)
-        # A GET carries no body. Parsing unconditionally raised here, which
-        # the client caught as "this endpoint has no /v1/models" and answered
-        # from its fallback - so the test was quietly exercising the wrong
-        # path.
         seen["body"] = json.loads(request.content) if request.content else None
         return httpx.Response(status, json=body)
 
@@ -48,7 +32,6 @@ def answer(client, body, status=200):
 
 
 def streamed(client, chunks, status=200):
-    """Point the client at a canned SSE stream."""
     seen = {}
 
     def handler(request):
@@ -60,10 +43,6 @@ def streamed(client, chunks, status=200):
     client._http = fake_transport(handler)
     return seen
 
-
-# ----------------------------------------------------------------------
-# Sending a conversation
-# ----------------------------------------------------------------------
 
 class TestTranslatingMessagesOut:
 
@@ -79,8 +58,6 @@ class TestTranslatingMessagesOut:
         ]
 
     def test_tool_arguments_become_a_json_string(self, client):
-        """Ollama sends a dict; OpenAI insists on a string. Sending the dict
-        is a 400 from every provider."""
         seen = answer(client, {"choices": [{"message": {"content": ""}}]})
         client.chat(model="m", messages=[
             {"role": "assistant", "content": "",
@@ -93,8 +70,6 @@ class TestTranslatingMessagesOut:
         assert call["function"]["arguments"] == '{"limit": 5}'
 
     def test_a_tool_result_quotes_the_call_it_answers(self, client):
-        """OpenAI rejects a tool message whose tool_call_id names no call.
-        Ollama's format carries only a name, so the pairing is rebuilt."""
         seen = answer(client, {"choices": [{"message": {"content": ""}}]})
         client.chat(model="m", messages=[
             {"role": "assistant", "content": "",
@@ -120,8 +95,6 @@ class TestTranslatingMessagesOut:
         assert second["tool_call_id"] == ids["query"]
 
     def test_an_unmatched_result_still_answers_something(self, client):
-        """A result naming a call we never made must not be dropped - the
-        model would wait for it forever."""
         seen = answer(client, {"choices": [{"message": {"content": ""}}]})
         client.chat(model="m", messages=[
             {"role": "assistant", "content": "",
@@ -132,7 +105,6 @@ class TestTranslatingMessagesOut:
         assert result["tool_call_id"] == assistant["tool_calls"][0]["id"]
 
     def test_an_assistant_turn_with_calls_sends_null_not_empty_content(self, client):
-        """Some endpoints reject an empty string alongside tool calls."""
         seen = answer(client, {"choices": [{"message": {"content": ""}}]})
         client.chat(model="m", messages=[
             {"role": "assistant", "content": "",
@@ -159,8 +131,6 @@ class TestTranslatingOptions:
         assert seen["body"]["temperature"] == 0.2
 
     def test_num_ctx_is_dropped(self, client):
-        """The context window is the endpoint's property, not the caller's,
-        and OpenAI rejects unknown parameters."""
         seen = answer(client, {"choices": [{"message": {"content": ""}}]})
         client.chat(model="m", messages=[],
                     options={"temperature": 0.2, "num_ctx": 32768})
@@ -185,15 +155,9 @@ class TestAuthenticationHeaders:
         assert c._http.headers["http-referer"] == "https://bank.example"
 
     def test_no_key_means_no_authorization_header(self):
-        """A vLLM endpoint inside the network usually wants none, and an
-        empty Bearer is worse than absent."""
         c = llm.OpenAICompatibleClient(base_url="http://vllm:8000/v1", api_key="")
         assert "authorization" not in c._http.headers
 
-
-# ----------------------------------------------------------------------
-# Reading the answer
-# ----------------------------------------------------------------------
 
 class TestTranslatingRepliesBack:
 
@@ -215,8 +179,6 @@ class TestTranslatingRepliesBack:
         assert call["function"]["arguments"] == '{"limit": 5}'
 
     def test_the_agent_loop_can_actually_read_it(self, client):
-        """The real contract: whatever comes back must survive the same
-        helpers the Ollama path uses."""
         from chat_tools import _parse_arguments, _plain_calls
 
         answer(client, {"choices": [{"message": {"content": None, "tool_calls": [
@@ -246,9 +208,6 @@ class TestStreaming:
         assert text == "About 4.2bn."
 
     def test_fragmented_tool_calls_are_assembled_into_one(self, client):
-        """OpenAI streams a call a few characters at a time. The agent loop
-        extends its list on every chunk, so emitting the fragments would give
-        it five broken calls instead of one good one."""
         streamed(client, [
             {"choices": [{"delta": {"tool_calls": [
                 {"index": 0, "id": "c1", "function": {"name": "qu", "arguments": ""}}]}}]},
@@ -294,10 +253,6 @@ class TestStreaming:
         assert "".join(c["message"]["content"] for c in chunks) == "ab"
 
 
-# ----------------------------------------------------------------------
-# When it goes wrong
-# ----------------------------------------------------------------------
-
 class TestErrors:
 
     def test_a_bad_key_says_so(self, client):
@@ -329,10 +284,6 @@ class TestErrors:
             list(client.chat(model="m", messages=[], stream=True))
 
 
-# ----------------------------------------------------------------------
-# Model listing
-# ----------------------------------------------------------------------
-
 class TestListingModels:
 
     def test_models_are_reported_in_the_shape_the_picker_reads(self, client):
@@ -342,16 +293,11 @@ class TestListingModels:
         assert [m["name"] for m in describe_models(client)] == ["gpt-4o", "gpt-4o-mini"]
 
     def test_an_endpoint_without_a_models_route_still_offers_one(self, client):
-        """Several self-hosted servers serve exactly one model and skip
-        /v1/models. An empty picker there looks like a fault."""
         client.default_model = "local-model"
         answer(client, {"error": "not found"}, status=404)
         assert client.list() == {"models": [{"model": "local-model", "size": 0}]}
 
     def test_tool_support_is_assumed(self, client):
-        """The API cannot report it. Assuming yes fails loudly on the first
-        call with the provider's own error; assuming no would refuse to start
-        against a perfectly good model."""
         assert "tools" in client.show("anything")["capabilities"]
 
     def test_the_picker_accepts_a_hosted_model(self, client):
@@ -361,10 +307,6 @@ class TestListingModels:
         chosen, _ = pick_tool_model(client, "gpt-4o")
         assert chosen == "gpt-4o"
 
-
-# ----------------------------------------------------------------------
-# Choosing a provider
-# ----------------------------------------------------------------------
 
 class TestProviderSelection:
 
@@ -379,8 +321,6 @@ class TestProviderSelection:
         assert llm.provider() == expected
 
     def test_an_unknown_provider_falls_back_to_local(self, monkeypatch):
-        """Failing safe means staying on the machine, not reaching for an
-        endpoint nobody configured."""
         monkeypatch.setattr(llm, "LLM_PROVIDER", "something-else")
         assert llm.provider() == llm.OLLAMA
 
@@ -415,20 +355,11 @@ class TestTheSessionUsesIt:
                             lambda: built.append(1) or "a-client")
         sess = session.Session("test")
         assert sess.client() == "a-client"
-        assert sess.client() == "a-client"     # cached, not rebuilt
+        assert sess.client() == "a-client"
         assert len(built) == 1
 
 
-# ----------------------------------------------------------------------
-# Reasoning models
-# ----------------------------------------------------------------------
-
 class TestTheMonologueNeverReachesTheUser:
-    """Qwen3 and its kind think out loud before answering. Ollama keeps that
-    apart from the reply on its own; an OpenAI-compatible endpoint either
-    puts it in a field of its own or leaves <think>...</think> in the
-    content, and the second one would be shown to the user as the answer."""
-
     def test_a_complete_block_is_removed(self):
         assert llm.strip_thinking(
             "<think>The user wants deposits. Let me consider.</think>"
@@ -443,8 +374,6 @@ class TestTheMonologueNeverReachesTheUser:
         assert llm.strip_thinking("Deposits total 4.2bn.") == "Deposits total 4.2bn."
 
     def test_an_unterminated_block_takes_the_rest_with_it(self):
-        """A reply cut off mid-thought has no answer in it, and showing the
-        raw monologue would be worse than showing nothing."""
         assert llm.strip_thinking(
             "Here: <think>still thinking and then cut") == "Here: "
 
@@ -459,8 +388,6 @@ class TestTheMonologueNeverReachesTheUser:
             "Deposits total 4.2bn.")
 
     def test_a_reasoning_field_is_ignored_entirely(self, client):
-        """Endpoints that separate it hand it over in `reasoning_content`.
-        It is never part of the answer."""
         answer(client, {"choices": [{"message": {
             "content": "Deposits total 4.2bn.",
             "reasoning_content": "The user is asking about deposits...",
@@ -471,10 +398,6 @@ class TestTheMonologueNeverReachesTheUser:
 
 
 class TestTheMonologueIsFilteredOutOfAStream:
-    """Harder than the buffered case: a token boundary can fall anywhere,
-    including the middle of "<think>", so half an opening tag must never
-    reach the browser."""
-
     def emitted(self, client, pieces):
         streamed(client, [{"choices": [{"delta": {"content": p}}]} for p in pieces])
         return "".join(c["message"]["content"]
@@ -485,7 +408,6 @@ class TestTheMonologueIsFilteredOutOfAStream:
             "Deposits 4.2bn.")
 
     def test_a_tag_split_across_chunks_is_still_recognised(self, client):
-        """The case that makes this a state machine rather than a replace."""
         assert self.emitted(
             client, ["<th", "ink>", "hmm", "</thi", "nk>", "Deposits 4.2bn."]
         ) == "Deposits 4.2bn."
@@ -503,15 +425,12 @@ class TestTheMonologueIsFilteredOutOfAStream:
             "Sales < 5 and revenue > 10")
 
     def test_nothing_is_held_back_at_the_end(self, client):
-        """The filter keeps a few characters in hand in case they start a
-        tag; the last of them still has to be emitted."""
         assert self.emitted(client, ["Deposits 4.2bn."]) == "Deposits 4.2bn."
 
     def test_a_stream_that_stops_mid_thought_emits_nothing(self, client):
         assert self.emitted(client, ["<think>still thinking"]) == ""
 
     def test_the_filter_is_per_stream_not_shared(self, client):
-        """A stream left mid-thought must not silence the next one."""
         self.emitted(client, ["<think>unfinished"])
         assert self.emitted(client, ["A clean answer."]) == "A clean answer."
 
@@ -519,9 +438,6 @@ class TestTheMonologueIsFilteredOutOfAStream:
 class TestEndpointSpecificBodyParameters:
 
     def test_extra_body_is_merged_into_the_request(self, client, monkeypatch):
-        """Qwen on vLLM or DashScope takes chat_template_kwargs to stop the
-        monologue being generated at all - cheaper than stripping it after
-        paying for the tokens."""
         monkeypatch.setattr(
             llm, "OPENAI_EXTRA_BODY",
             {"chat_template_kwargs": {"enable_thinking": False}})
@@ -537,8 +453,6 @@ class TestEndpointSpecificBodyParameters:
 
     @pytest.mark.parametrize("raw", ["not json", "[1, 2]", '"a string"', "7"])
     def test_a_malformed_setting_is_refused_with_a_reason(self, monkeypatch, raw):
-        """It fails at import, naming the setting - rather than surfacing as
-        a 400 from the endpoint on the first question somebody asks."""
         import config
 
         monkeypatch.setenv("_TEST_BODY", raw)

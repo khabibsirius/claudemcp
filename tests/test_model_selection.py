@@ -1,11 +1,3 @@
-"""Choosing a model that can actually drive the assistant.
-
-The configured OLLAMA_MODEL is normally chosen for dashboard design, which
-needs JSON rather than tools - phi4 is a good designer and cannot call a tool
-at all. Refusing to start in that case makes the product look broken to
-someone who has no idea models differ in this way.
-"""
-
 import pytest
 
 from ollama_client import (
@@ -22,7 +14,6 @@ CAPABILITIES = {
     "gemma4:26b": ["completion", "vision", "tools", "thinking"],
     "qwen2.5-coder:7b": ["completion", "tools", "insert"],
     "kimi-k2.5:cloud": ["completion", "tools"],
-    # Ollama uses both separators for hosted models.
     "gpt-oss:120b-cloud": ["completion", "tools"],
     "tiny/nexus:1b": ["completion", "tools"],
 }
@@ -63,10 +54,9 @@ class TestCapabilityDetection:
         assert supports_tools(FakeClient(), model) is expected
 
     def test_detection_does_not_load_the_model(self):
-        """Probing by making a chat call would pull a 26B model into memory."""
         client = FakeClient()
         supports_tools(client, "gemma4:26b")
-        assert client.loaded == ["gemma4:26b"]  # show() only, never chat()
+        assert client.loaded == ["gemma4:26b"]
 
     def test_client_has_no_chat_method_in_this_test(self):
         assert not hasattr(FakeClient(), "chat")
@@ -80,25 +70,17 @@ class TestCandidateRanking:
         assert "gemma4:26b" in candidates
 
     def test_cloud_models_rank_last(self):
-        """Selectable, but never the automatic pick: a cloud model is the one
-        choice that sends the data off the machine."""
         candidates = tool_capable_models(FakeClient())
         assert candidates.index("kimi-k2.5:cloud") > candidates.index("gemma4:26b")
 
     def test_hyphenated_cloud_names_also_rank_last(self):
-        """gpt-oss:120b-cloud is hosted too. Matching only ":cloud" made it
-        look local, and hosted models report 0 GB - so it sorted first and
-        became the automatic pick, sending data off the machine by default."""
         candidates = tool_capable_models(FakeClient())
         assert candidates.index("gpt-oss:120b-cloud") > candidates.index("gemma4:26b")
 
     def test_a_hosted_model_is_never_auto_selected(self):
-        """Only hosted models installed: still picks one, but the local
-        default must win whenever a local option exists."""
         assert pick_tool_model(FakeClient(), "phi4:14b")[0] == "gemma4:26b"
 
     def test_tiny_models_rank_below_real_ones(self):
-        """A 1B model accepts tools and then invents the arguments."""
         candidates = tool_capable_models(FakeClient())
         assert candidates.index("tiny/nexus:1b") > candidates.index("gemma4:26b")
 
@@ -111,8 +93,6 @@ class TestPickToolModel:
         assert note == ""
 
     def test_falls_back_when_the_preference_cannot_call_tools(self):
-        """The regression: `python web_app.py` with the default phi4 refused
-        to start at all."""
         model, note = pick_tool_model(FakeClient(), "phi4:14b")
 
         assert model == "gemma4:26b"

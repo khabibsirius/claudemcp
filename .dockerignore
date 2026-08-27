@@ -1,23 +1,14 @@
-# Secrets, above everything else. .env holds the model API key and possibly
-# the LDAP service account password; a copy of it baked into an image layer
-# is a copy that travels to wherever the image goes, and `docker history`
-# will show it. Configuration reaches the container through env_file at run
-# time instead.
 .env
 .env.backup*
 .env.*.bak
 *.pem
 certs/
 
-# State. users.db holds password hashes, sessions and the audit trail;
-# history/ holds every conversation. Both belong in a volume, not an image.
 *.db
 *.db-wal
 *.db-shm
 glossary.md
 
-# Not needed at run time, and copying them makes the image bigger and the
-# build slower for no gain.
 .venv/
 venv/
 env/
@@ -37,8 +28,6 @@ node_modules/
 .vscode/
 .idea/
 
-# Documentation and working notes. Useful in the repository, dead weight in
-# a container.
 *.md
 !README.md
 readiness.html

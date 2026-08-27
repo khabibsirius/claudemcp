@@ -1,10 +1,3 @@
-"""Chart sorting and top-N.
-
-Charts were coming out in data-load order, which is why a "Sales by Region"
-bar chart was a row of bars in no discernible sequence, and why a chart
-titled "Top 5 Products" showed every product there was.
-"""
-
 import pytest
 
 
@@ -21,12 +14,10 @@ class TestMeasureSorting:
 
     @pytest.mark.parametrize("chart_type", ["barchart", "piechart", "sn-table"])
     def test_the_measure_column_sorts_first(self, offline_engine, chart_type):
-        """The sort only applies if the measure leads qInterColumnSortOrder."""
         cube = hypercube(offline_engine, chart_type)
         assert cube["qInterColumnSortOrder"][0] == 1
 
     def test_line_charts_sort_along_the_dimension(self, offline_engine):
-        """A trend line sorted by value is not a trend line."""
         cube = hypercube(offline_engine, "linechart", dimension="Order Date")
 
         assert "qSortBy" not in cube["qMeasures"][0]
@@ -41,8 +32,6 @@ class TestMeasureSorting:
 
 
 class TestTopN:
-    """Qlik cannot rank inside an expression, so top-N is a dimension limit."""
-
     def test_limit_becomes_a_dimension_limit(self, offline_engine):
         cube = hypercube(offline_engine, "barchart", limit=5)
         spec = cube["qDimensions"][0]["qOtherTotalSpec"]
@@ -52,13 +41,10 @@ class TestTopN:
         assert spec["qOtherSortMode"] == "OTHER_SORT_DESCENDING"
 
     def test_it_sits_beside_qdef_not_inside_it(self, offline_engine):
-        """Nested in qDef the engine silently ignores it, and the chart shows
-        every value - verified against a live app."""
         cube = hypercube(offline_engine, "barchart", limit=5)
         assert "qOtherTotalSpec" not in cube["qDimensions"][0]["qDef"]
 
     def test_the_others_bucket_is_hidden(self, offline_engine):
-        """An "Others" bar aggregating everything else dwarfs the top five."""
         cube = hypercube(offline_engine, "barchart", limit=5)
         assert cube["qDimensions"][0]["qOtherTotalSpec"]["qSuppressOther"] is True
 
@@ -67,7 +53,6 @@ class TestTopN:
         assert "qOtherTotalSpec" not in cube["qDimensions"][0]
 
     def test_line_charts_are_not_limited(self, offline_engine):
-        """Truncating a time series to its five biggest points is meaningless."""
         cube = hypercube(offline_engine, "linechart", limit=5)
         assert "qOtherTotalSpec" not in cube["qDimensions"][0]
 
@@ -91,15 +76,12 @@ class TestLimitNormalisation:
 class TestValueLabels:
 
     def test_bars_show_their_values(self):
-        """A bar you have to measure against an axis by eye isn't telling
-        you the number."""
         from chart_specs import build_properties
 
         properties = build_properties("barchart", "B_1", "t", {"qDimensions": [], "qMeasures": []})
         assert properties["dataPoint"]["showLabels"] is True
 
     def test_pie_keeps_its_own_label_shape(self):
-        """sn-pie-chart ignores bar/line's dataPoint keys entirely."""
         from chart_specs import build_properties
 
         properties = build_properties("piechart", "P_1", "t", {"qDimensions": [], "qMeasures": []})
