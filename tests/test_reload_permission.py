@@ -127,17 +127,35 @@ class TestTheSwitchOnlyCoversLoading:
 
     def test_the_switch_permits_a_reload(self, clean):
         session.set_allow_reload(True)
-        assert web_app._may_run("reload_data replaces the data. Run it?",
-                                "reload_data") is True
+        may = web_app._may_run(session.system())
+        assert may("reload_data replaces the data. Run it?", "reload_data") is True
 
     def test_the_switch_does_not_permit_a_script_overwrite(self, clean):
         session.set_allow_reload(True)
-        assert web_app._may_run("write_script overwrites the whole script. Run it?",
-                                "write_script") is False
+        may = web_app._may_run(session.system())
+        assert may("write_script overwrites the whole script. Run it?",
+                   "write_script") is False
 
     def test_switching_it_off_still_stops_a_reload(self, clean):
         session.set_allow_reload(False)
-        assert web_app._may_run("anything", "reload_data") is False
+        may = web_app._may_run(session.system())
+        assert may("anything", "reload_data") is False
+
+    def test_the_switch_is_the_asking_user_s_own(self, clean):
+        """One person allowing a reload does not allow it for everybody.
+
+        The setting used to be module-level, so a single switch decided it
+        for every user of the server at once.
+        """
+        import users
+
+        cautious = users.create("cautious", "test-password-1")
+        theirs = session.for_user(cautious)
+        theirs.set_allow_reload(False)
+        session.set_allow_reload(True)
+
+        assert web_app._may_run(session.system())("q", "reload_data") is True
+        assert web_app._may_run(theirs)("q", "reload_data") is False
 
     def test_a_refused_overwrite_leaves_the_script_alone(self, clean):
         """Refused, not silently applied: the note steers the model to its
@@ -147,7 +165,7 @@ class TestTheSwitchOnlyCoversLoading:
 
         result = execute(engine, "write_script",
                          {"content": "LOAD 1;", "mode": "replace_all"},
-                         confirm=web_app._may_run)
+                         confirm=web_app._may_run(session.system()))
 
         assert result["cancelled"] is True
         assert "replace_tab" in result["note"]

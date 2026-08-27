@@ -422,12 +422,17 @@ class TestReloadFallback:
         def dies(request):
             raise ConnectionResetError("peer reset")
 
-        engine.ws.handlers = {"DoReloadEx": dies, "DoReload": {"qReturn": True}}
+        # Held onto deliberately: a socket the network has taken away is now
+        # discarded, so `engine.ws` is None by the time this is checked. That
+        # is the behaviour the recovery depends on - see _drop_socket.
+        socket = engine.ws
+        socket.handlers = {"DoReloadEx": dies, "DoReload": {"qReturn": True}}
 
         with pytest.raises(QlikConnectionError):
             engine.reload_data()
 
-        assert engine.ws.requests_for("DoReload") == []
+        assert socket.requests_for("DoReload") == []
+        assert engine.connected is False
 
     def test_a_genuine_method_error_still_falls_back(self, engine):
         engine.ws.handlers = {

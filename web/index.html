@@ -90,6 +90,39 @@
   }
   header .spacer { flex: 1; }
 
+  /* Who is signed in, and the way out. Kept to the right of the primary
+     actions so it never competes with Save and Load data. */
+  .account { display: flex; align-items: center; gap: 8px; padding-left: 12px;
+             margin-left: 4px; border-left: 1px solid var(--line); }
+  .account .who {
+    font-size: 12.5px; color: var(--muted); text-decoration: none;
+    max-width: 180px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .account a.who { color: var(--accent); font-weight: 600; }
+  .account a.who:hover { text-decoration: underline; }
+
+  .acting {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 16px; font-size: 12.5px;
+    background: var(--bad-soft); color: var(--bad);
+    border-bottom: 1px solid var(--bad);
+  }
+  .acting[hidden] { display: none; }
+
+  /* Shown when the connection to Qlik has gone. Shares the acting bar's
+     shape on purpose - it is the same kind of thing: a state the page is in
+     that the person has to know about, with the one action that ends it. */
+  .offline {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 16px; font-size: 12.5px;
+    background: var(--bad-soft); color: var(--bad);
+    border-bottom: 1px solid var(--bad);
+  }
+  .offline[hidden] { display: none; }
+  .offline span { flex: 1; }
+  .offline button.busy { opacity: .6; pointer-events: none; }
+
   .pick { display: flex; flex-direction: column; gap: 1px; font-size: 10.5px;
           font-weight: 600; letter-spacing: .4px; text-transform: uppercase;
           color: var(--faint); }
@@ -510,7 +543,30 @@
   </label>
   <button id="btnSave" data-i18n="save">Save</button>
   <button id="btnReload" class="primary"><span class="spin"></span><span data-i18n="loadData">Load data</span></button>
+  <div class="account" id="account" hidden>
+    <a class="who" id="adminLink" href="/admin" data-i18n="admin" hidden>Admin</a>
+    <span class="who" id="whoami"></span>
+    <button id="btnSignOut" data-i18n="signOut">Sign out</button>
+  </div>
 </header>
+
+<!-- Only ever shown to an administrator standing in for somebody else. It is
+     deliberately loud: every question asked from here lands in that person's
+     conversation, under their Qlik identity. -->
+<div class="acting" id="actingBar" hidden>
+  <span id="actingText"></span>
+  <button id="btnStopActing" data-i18n="stopActing">Stop</button>
+</div>
+
+<!-- The connection to Qlik went away. The server rebuilds it by itself on
+     the next request, so this only appears when that did not work - Qlik is
+     genuinely down or still restarting. Then there is one thing to press,
+     rather than a red line about a websocket and a phone call to whoever
+     can restart the server. -->
+<div class="offline" id="offlineBar" hidden>
+  <span id="offlineText"></span>
+  <button id="btnReconnect" data-i18n="reconnect">Reconnect</button>
+</div>
 
 <main>
   <div class="col sections">
@@ -579,6 +635,11 @@ const LANGUAGES = [["en", "English"], ["ru", "Русский"], ["uz", "O'zbekch
 
 const STRINGS = {
   en: {
+    admin: "Admin",
+    signOut: "Sign out",
+    signedInAs: "Signed in as {name}",
+    actingAs: "You are acting as {name}. Everything you do here lands in their conversation, under their Qlik identity.",
+    stopActing: "Stop",
     language: "Language",
     app: "App",
     model: "Model",
@@ -608,6 +669,10 @@ const STRINGS = {
     askPlaceholderOffline: "Assistant unavailable - start Ollama, then just type here again.",
     hint: "One box for everything - loading, cleaning, dashboards, questions. The assistant writes the script; you press Load data to run it.",
     hintOffline: "Ollama isn't running, so the assistant is off. Everything else - the editor, Load data, Save - still works.",
+    reconnect: "Reconnect",
+    reconnecting: "Reconnecting…",
+    reconnected: "Connected again.",
+    qlikLost: "The connection to Qlik was lost.",
     welcome: "Hi — I can load and clean data, write the load script, and build dashboards in this app. Describe what you want, or try one of the suggestions below.",
     suggestions: [
       "What data is loaded right now?",
@@ -658,6 +723,11 @@ const STRINGS = {
   },
 
   ru: {
+    admin: "Администрирование",
+    signOut: "Выйти",
+    signedInAs: "Вы вошли как {name}",
+    actingAs: "Вы работаете от имени пользователя {name}. Всё, что вы здесь делаете, попадает в его диалог и выполняется под его учётной записью Qlik.",
+    stopActing: "Прекратить",
     language: "Язык",
     app: "Приложение",
     model: "Модель",
@@ -687,6 +757,10 @@ const STRINGS = {
     askPlaceholderOffline: "Ассистент недоступен — запустите Ollama и напишите снова.",
     hint: "Одно поле для всего — загрузка, очистка, дашборды, вопросы. Ассистент пишет скрипт; вы нажимаете «Загрузить данные».",
     hintOffline: "Ollama не запущена, ассистент выключен. Всё остальное — редактор, загрузка данных, сохранение — работает.",
+    reconnect: "Переподключиться",
+    reconnecting: "Переподключение…",
+    reconnected: "Связь восстановлена.",
+    qlikLost: "Связь с Qlik потеряна.",
     welcome: "Здравствуйте — я могу загрузить и очистить данные, написать скрипт загрузки и построить дашборды в этом приложении. Опишите, что нужно, или выберите подсказку ниже.",
     suggestions: [
       "Какие данные сейчас загружены?",
@@ -737,6 +811,11 @@ const STRINGS = {
   },
 
   uz: {
+    admin: "Boshqaruv",
+    signOut: "Chiqish",
+    signedInAs: "{name} sifatida kirdingiz",
+    actingAs: "Siz {name} nomidan ishlayapsiz. Bu yerda qilgan hamma ishingiz uning suhbatiga tushadi va uning Qlik hisobi ostida bajariladi.",
+    stopActing: "To'xtatish",
     language: "Til",
     app: "Ilova",
     model: "Model",
@@ -766,6 +845,10 @@ const STRINGS = {
     askPlaceholderOffline: "Assistent mavjud emas — Ollama'ni ishga tushiring va qaytadan yozing.",
     hint: "Hammasi uchun bitta maydon — yuklash, tozalash, dashbordlar, savollar. Assistent skript yozadi; siz «Ma'lumotni yuklash» tugmasini bosasiz.",
     hintOffline: "Ollama ishlamayapti, shuning uchun assistent o'chiq. Qolgani — muharrir, ma'lumot yuklash, saqlash — ishlayveradi.",
+    reconnect: "Qayta ulanish",
+    reconnecting: "Qayta ulanmoqda…",
+    reconnected: "Aloqa tiklandi.",
+    qlikLost: "Qlik bilan aloqa uzildi.",
     welcome: "Salom — men ma'lumotni yuklay va tozalay olaman, yuklash skriptini yozaman va bu ilovada dashbordlar tuzaman. Nima kerakligini yozing yoki quyidagi takliflardan birini tanlang.",
     suggestions: [
       "Hozir qanday ma'lumot yuklangan?",
@@ -862,13 +945,64 @@ function setStatus(text, kind) {
 
 async function api(path, options) {
   const response = await fetch(path, options);
+  // A session expires while the page is still open, and every button then
+  // fails with a message about being signed out that nobody can act on from
+  // here. Go to the login page instead, which is the thing to do about it.
+  if (response.status === 401) {
+    window.location.replace("/login");
+    throw new Error("signed out");
+  }
   if (!response.ok) {
     let detail = response.statusText;
     try { detail = (await response.json()).detail || detail; } catch (_) {}
-    throw new Error(detail);
+    const error = new Error(detail);
+    // The server marks the one failure a person can do something about:
+    // the Qlik connection is gone and could not be rebuilt. Everything else
+    // is a message; this one is a message with a button.
+    if (response.headers.get("X-Qlik-Reconnect") === "1") {
+      error.reconnect = true;
+      showOffline(detail);
+    }
+    throw error;
   }
+  // Any answer at all means the connection is back - including one from a
+  // request the person made for some other reason. The banner should not
+  // outlive the problem and wait to be dismissed.
+  hideOffline();
   return response.json();
 }
+
+// ----------------------------------------------------------------------
+// Losing Qlik, and getting it back
+// ----------------------------------------------------------------------
+
+function showOffline(detail) {
+  $("offlineText").textContent = detail || t("qlikLost");
+  $("offlineBar").hidden = false;
+}
+
+function hideOffline() {
+  $("offlineBar").hidden = true;
+}
+
+$("btnReconnect").onclick = async () => {
+  const button = $("btnReconnect");
+  button.classList.add("busy");
+  $("offlineText").textContent = t("reconnecting");
+  try {
+    await api("/api/reconnect", {method: "POST"});
+    hideOffline();
+    setStatus(t("reconnected"), "good");
+    // Put the page back the way it was: the script, the sheets and the
+    // connections were all read through the connection that had gone.
+    await load();
+  } catch (e) {
+    // api() has already re-shown the banner with the current reason.
+    showOffline(e.message);
+  } finally {
+    button.classList.remove("busy");
+  }
+};
 
 function renderGutter() {
   const lines = $("script").value.split("\n").length;
@@ -1484,8 +1618,49 @@ $("modelSel").onchange = event => {
 };
 $("allowReload").onchange = event => select({allow_reload: event.target.checked});
 
+// ---- Who is signed in -----------------------------------------------------
+
+// Rendered from /api/state rather than a call of its own: the page already
+// waits on that one, and a second request only to name the person would put
+// a second round trip in front of the first paint.
+function renderAccount(user) {
+  const box = $("account");
+  if (!user) { box.hidden = true; return; }
+  box.hidden = false;
+
+  const name = user.display_name || user.username;
+  $("whoami").textContent = name;
+  $("whoami").title = t("signedInAs", {name: name});
+  $("adminLink").hidden = !user.is_admin;
+
+  const acting = $("actingBar");
+  acting.hidden = !user.impersonating;
+  if (user.impersonating) {
+    $("actingText").textContent = t("actingAs", {name: name});
+  }
+}
+
+$("btnSignOut").onclick = async () => {
+  try { await api("/api/logout", {method: "POST"}); } catch (e) {}
+  window.location.replace("/login");
+};
+
+$("btnStopActing").onclick = async () => {
+  try {
+    await api("/api/admin/act-as", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({user_id: null}),
+    });
+    window.location.reload();
+  } catch (e) {
+    setStatus(e.message, "bad");
+  }
+};
+
 async function load() {
   const state = await api("/api/state");
+  renderAccount(state.user);
   $("meta").textContent = state.mode;
   $("allowReload").checked = state.allow_reload !== false;
   // Qlik works without Ollama; only the assistant needs it. Say which half
@@ -1608,7 +1783,17 @@ async function ask(question) {
       body: JSON.stringify({message: question}),
       signal: turn.signal,
     });
-    if (!response.ok) throw new Error(response.statusText);
+    // Not api(): this one reads the body as a stream rather than as JSON.
+    // The failure handling still has to match, or a lost connection during a
+    // question shows "Service Unavailable" and no way to act on it - while
+    // every other button on the page offers Reconnect.
+    if (!response.ok) {
+      let detail = response.statusText;
+      try { detail = (await response.json()).detail || detail; } catch (_) {}
+      if (response.headers.get("X-Qlik-Reconnect") === "1") showOffline(detail);
+      throw new Error(detail);
+    }
+    hideOffline();
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();

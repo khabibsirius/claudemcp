@@ -5,6 +5,9 @@
 testpaths = ["tests"]
 pythonpath = [".", "tests"]
 addopts = "-q"
+markers = [
+    "live_auth: run against the real login instead of a stood-in administrator",
+]
 
 [tool.ruff]
 line-length = 100

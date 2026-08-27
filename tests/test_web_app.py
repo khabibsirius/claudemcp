@@ -22,6 +22,11 @@ class FakeEngine:
         self.reload_ok = reload_ok
         self.rejected = None
 
+    def open_app(self, name):
+        self.connected = True
+        self.app_name = name
+        return 1
+
     def get_script(self):
         return self.script
 
@@ -104,9 +109,37 @@ class TestState:
         engine.list_connections = boom
         assert client.get("/api/state").json()["connections"] == []
 
-    def test_reports_not_connected(self, client):
+    def test_a_dropped_connection_is_rebuilt_rather_than_reported(self, client):
+        """A connection that went away is not the person's problem to solve.
+
+        This used to be a 503 that stayed a 503 - nothing retried, so one
+        dropped packet cost everyone the product until the server was
+        restarted. The app on record is re-opened instead.
+        """
         session._state["engine"] = None
-        assert client.get("/api/state").status_code == 503
+
+        response = client.get("/api/state")
+
+        assert response.status_code == 200
+        assert response.json()["app"] == "data"
+
+    def test_a_connection_that_cannot_be_rebuilt_says_so_and_offers_the_button(
+            self, client, monkeypatch):
+        """When Qlik really is down, say which half is broken and mark the
+        answer as one the Reconnect button applies to."""
+        from qlik_engine import QlikConnectionError
+
+        def unreachable():
+            raise QlikConnectionError("Could not connect to the Qlik Engine")
+
+        monkeypatch.setattr(session, "QlikEngine", unreachable)
+        session._state["engine"] = None
+
+        response = client.get("/api/state")
+
+        assert response.status_code == 503
+        assert response.headers.get("X-Qlik-Reconnect") == "1"
+        assert "lost" in response.json()["detail"]
 
 
 class TestScriptSaving:
@@ -313,5 +346,6 @@ class TestDeletingSheetsFromTheBrowser:
         chart without changing what the person is looking at."""
         from web_app import _may_run
 
+        _may_run = _may_run(session.system())
         assert _may_run("q", "write_script") is False
         assert _may_run("q", "delete_sheet") is False

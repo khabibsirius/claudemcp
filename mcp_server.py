@@ -29,6 +29,7 @@ from mcp.server import MCPServer
 from pydantic import BaseModel, Field
 
 from chart_specs import CHART_TYPES
+from chat_tools import execute
 from dashboard_builder import build_sheet, design_dashboard, enrich_fields
 import session
 from qlik_engine import QlikEngine, QlikEngineError
@@ -330,6 +331,123 @@ def qlik_save() -> str:
     are not on disk until this runs."""
     _require_engine().save()
     return "Saved."
+
+
+# ----------------------------------------------------------------------
+# Reading the app
+#
+# The building tools above are deliberately few. These are the other half:
+# reading what is already there, which is what an assistant needs before it
+# can say anything true about the app. Without them a client could create a
+# sheet but never read a figure out of one, so anything it said about the
+# data was inferred from field names.
+#
+# Every one of them is READ-ONLY, and that is a rule rather than a
+# coincidence. The tools that change things - reload_data, write_script,
+# delete_sheet - stay out until MCP can say who is calling: its handlers run
+# in tasks started from the server's lifespan, so they cannot see the
+# authenticated user, they all share one Qlik session, there is no
+# confirmation step, and nothing they did would appear in the audit trail.
+# A load-script rewrite that no record attributes to anybody is exactly what
+# this project must not have. They are reachable from the web assistant and
+# `python chat.py`, where a person is present and the trail records them.
+# ----------------------------------------------------------------------
+
+READ_ONLY = {
+    "query", "data_model", "read_script", "list_charts",
+    "check_expression", "analyze_sheet",
+}
+
+
+def _read(name: str, **arguments) -> dict:
+    """Run one read-only action, refusing anything that is not one.
+
+    `allowed` is passed rather than assumed: execute() enforces it, so a
+    typo here fails closed instead of quietly reaching a tool that writes.
+    """
+    try:
+        return execute(_require_engine(), name, arguments, allowed=READ_ONLY)
+    except QlikEngineError as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def qlik_query(dimensions: list[str] | None = None,
+               measures: list[str] | None = None,
+               limit: int = 20) -> dict:
+    """Read actual values out of the open app.
+
+    dimensions=["Region"], measures=["Sum([Sales])"] returns each region with
+    its total, largest first, along with each row's share of the whole - the
+    shares are computed here rather than left to the caller, because a share
+    worked out from a truncated list is a share of the page rather than of
+    the book.
+
+    Measures must be a simple aggregation: Sum, Count, Count(DISTINCT ...),
+    Avg, Min, Max. Anything with Aggr, SortBy or Limit fails to calculate and
+    comes back empty rather than erroring.
+    """
+    return _read("query", dimensions=dimensions or [],
+                 measures=measures or [], limit=limit)
+
+
+@mcp.tool()
+def qlik_data_model() -> dict:
+    """What is loaded: tables, row counts, and every field with its
+    distinct-value count and null count, plus quality problems such as
+    constant or mostly-empty columns.
+
+    Read this before designing anything. Cardinality is what separates a
+    category from an identifier, and a bar chart grouped by an order id with
+    65,000 values renders perfectly and tells you nothing.
+    """
+    return _read("data_model")
+
+
+@mcp.tool()
+def qlik_script(tab: str = "") -> dict:
+    """Read the app's load script, or one named tab of it.
+
+    Reading only. The script is written through the web assistant or
+    `python chat.py`, where a broken script is syntax-checked and rolled
+    back, and where the change is recorded against a person.
+    """
+    return _read("read_script", tab=tab)
+
+
+@mcp.tool()
+def qlik_list_charts() -> dict:
+    """Every chart in the app with its id, type, title, dimensions and
+    measure expressions, and every sheet with how many charts are on it.
+
+    Empty sheets are included: a count that silently skipped them made
+    "you have 3 sheets" wrong.
+    """
+    return _read("list_charts")
+
+
+@mcp.tool()
+def qlik_check_expression(expression: str) -> dict:
+    """Ask Qlik whether an expression is valid, without building anything.
+
+    Returns the engine's own error and any field names that do not exist.
+    Worth calling before qlik_build_sheet: Qlik does not reject a chart that
+    references a field which isn't there - it creates the object and renders
+    an empty box.
+    """
+    return _read("check_expression", expression=expression)
+
+
+@mcp.tool()
+def qlik_analyze_sheet(sheet: str = "", chart_ids: list[str] | None = None) -> dict:
+    """Read the real numbers behind a sheet's charts and return what they show.
+
+    Totals, the largest and smallest category, concentration and
+    period-on-period change - all computed in Python from the rows, not left
+    to a model to derive. Shares and totals are withheld for a measure that
+    does not add up, such as an average or a margin.
+    """
+    return _read("analyze_sheet", sheet=sheet, chart_ids=chart_ids or [])
 
 
 if __name__ == "__main__":

@@ -7,6 +7,11 @@ ollama>=0.6,<1
 # Settings from .env
 python-dotenv>=1.0,<2
 
+# Active Directory sign-in (LDAP_ENABLED). Pure Python, so it installs on
+# Windows without a compiler - unlike python-ldap, which needs OpenLDAP's C
+# libraries and is a bad afternoon on a locked-down server.
+ldap3>=2.9,<3
+
 # MCP server. [cli] adds `mcp dev` / `mcp run`.
 mcp[cli]>=2.0,<3
 

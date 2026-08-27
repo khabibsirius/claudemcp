@@ -1,6 +1,8 @@
 # Qlik Assistant — Pre-Production Readiness
 
 Prepared 21 Aug 2026, revised 24 Aug · 844 tests passing
+**Revised 25 Aug: B1 and B2 are closed** — see *Since this was written*
+below. 1,266 tests passing.
 Findings verified against the live app; unverified judgement is marked as such.
 
 ---
@@ -15,6 +17,62 @@ What is not ready is everything a bank requires around that — there is no
 authentication, all users share one conversation, and it runs on Qlik Sense
 **Desktop**. None of those are model problems, and none are fixed by
 prompting.
+
+---
+
+## Since this was written
+
+The open question in *Suggested order* step 2 — single-operator or
+multi-user — was answered: **multi-user**, with each person holding their own
+Qlik Sense Enterprise account.
+
+| Was | Now |
+|---|---|
+| **B1** No authentication anywhere; `/mcp` mounted with no check | Closed. Everyone signs in; the gate is middleware so the `/mcp` mount is covered; deny by default; server refuses a non-loopback bind with auth off |
+| **B2** One `_state`: every user in the same conversation | Closed. One `Session` per person — own conversation, history, settings, and on Enterprise their own engine socket opened as them |
+| **B3** Runs against Desktop | Unchanged, and now explicit rather than assumed. Desktop shares one connection because it can do nothing else; Enterprise impersonates per user. The same accounts work on both |
+| **O2** No audit trail of who asked what or changed the script | Partly closed. Logins, failed logins, script rewrites, reloads, account changes and admin reads of a conversation are recorded. Retention policy still an open question |
+
+New: `users.py` (accounts, SQLite), `auth.py` (the gate), `web/login.html`,
+`web/admin.html`. `session.py` and `history.py` became per person.
+
+**Still open, and worth naming:** the MCP endpoint is limited to
+administrators, because its tool handlers run in tasks started from the
+server's lifespan rather than from the request and so cannot see who
+authenticated. Every MCP tool call lands in the shared system session. That
+is stated in the README rather than papered over, and closing it means the
+tools taking a session explicitly.
+
+R1–R3 and O1/O4 are untouched by this work.
+
+### Losing a dependency no longer costs everybody the product
+
+Not on the original list, and it should have been: a dropped connection put
+the server into a state it never left. Six failures were found by probing
+rather than reading, and all six are closed.
+
+| Failure | Was | Now |
+|---|---|---|
+| Websocket dies mid-call | 2 of the 3 ways it can die left the engine reporting itself **connected**, so nothing ever rebuilt it | Every path discards the socket; measured 3 of 3 |
+| A session's connection goes away | "No app is open. Open one first.", forever, on every request until a restart | Rebuilt on the next request, on the app that person was using |
+| Qlik unreachable at startup | Process exits — under a service manager, a restart loop that takes the login page, the admin pages, saved conversations and the audit trail with it | Starts anyway and says so; connects on the first request that works |
+| Qlik down, many users | Every request from every user attempts its own connection, each holding a worker thread for the connect timeout | One attempt per session per `RECONNECT_COOLDOWN_SECONDS`; measured 1 attempt per 100 requests |
+| Model endpoint blackholed | 600s connect budget per turn, holding a worker thread and the session lock — 128 threads was 21 thread-hours | Connect 10s, generation still 600s |
+| Idle sessions reaped | Websockets closed while holding the registry lock, which every request takes — measured 0.95s stalls on requests needing only a dictionary lookup | Chosen under the lock, closed outside it; median 0.00s |
+
+Two things a person can press, so nobody phones an administrator: **Reconnect**
+on the page when their own connection is gone, and **Reconnect everyone to
+Qlik** on the admin page when Qlik has come back — neither signs anybody out
+or discards a conversation. `/api/health` and `/api/admin/health` report what
+is actually reachable; `/healthz` stays a flat 200 on purpose, because a
+probe that failed during a Qlik outage would have the service restarted for
+somebody else's problem.
+
+Covered by `tests/test_resilience.py` (31 tests) and verified end-to-end
+against a real server over a real socket.
+
+**Not closed:** a full disk or a locked database file still fails the request
+that hits it. Reconnecting does not fix either, so nothing pretends to.
 
 ---
 
@@ -37,7 +95,7 @@ prompting.
 Each of these makes the system unfit to put in front of a banker, regardless
 of how good the answers are.
 
-### B1 — The web app and MCP endpoint have no authentication
+### B1 — The web app and MCP endpoint have no authentication — **CLOSED 25 Aug**
 
 There is no login, no token, no session identity anywhere in `web_app.py`.
 Anyone who can reach the port can read the bank's figures, rewrite the load
@@ -51,7 +109,7 @@ can try it, that containment is gone and nothing warns them.
 **Before pre-prod:** authentication in front of both the UI and `/mcp`, and
 refuse to start on a non-loopback host unless auth is configured.
 
-### B2 — Every user shares one conversation and one Qlik session
+### B2 — Every user shares one conversation and one Qlik session — **CLOSED 25 Aug**
 
 `session.py` holds a single module-level `_state`: one engine, one message
 list, one `chat_id`. Two people using the assistant at once are in the *same*

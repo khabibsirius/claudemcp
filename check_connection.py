@@ -1,17 +1,35 @@
-"""Smoke test: can we reach Qlik, open the app, and reach Ollama?
+"""Smoke test: is everything this needs actually reachable?
 
     python check_connection.py
+    python check_connection.py --ldap-user jsmith    # test a real sign-in
 
-Run this first when something isn't working. It checks each dependency
-separately so you find out *which* one is broken, rather than watching the
-whole pipeline fail at once. Uses no LLM tokens beyond a model listing.
+Run this first when something isn't working, and run it before go-live. It
+checks each dependency separately so you find out *which* one is broken,
+rather than watching the whole pipeline fail at once.
+
+Four things, because there are now four ways a deployment fails on its first
+morning: Qlik, the model endpoint, Active Directory, and the accounts
+database. The model check costs a handful of tokens - it asks for one tool
+call, because "the endpoint answers" and "this model can drive the
+assistant" are different questions and only the second one matters.
 """
 
-import sys
+import argparse
+import getpass
 
-from config import APP_NAME, OLLAMA_MODEL
-from config import summary as config_summary
+import directory
+import llm
 import session
+import users
+from config import (
+    APP_NAME,
+    ENTERPRISE,
+    LDAP_BIND_USER,
+    OLLAMA_MODEL,
+    OPENAI_MODEL,
+    QLIK_MODE,
+)
+from config import summary as config_summary
 from ollama_client import OllamaClient, OllamaError
 from qlik_engine import QlikEngine, QlikEngineError
 
@@ -108,17 +126,200 @@ def check_switching(names):
     return True
 
 
-def check_ollama():
-    """Only needed for the AI-design features, not the low-level MCP tools."""
+# ----------------------------------------------------------------------
+# The model
+# ----------------------------------------------------------------------
+
+PROBE_TOOL = [{
+    "type": "function",
+    "function": {
+        "name": "report_ok",
+        "description": "Call this to confirm you can call tools.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+}]
+
+
+def check_model():
+    """Can the configured model actually drive the assistant?
+
+    Two different questions, and only the second one matters: an endpoint
+    that answers is not the same as a model that will call a tool. The
+    assistant is a tool-calling loop, so a model that ignores tools produces
+    a fluent paragraph and builds nothing - which reads as the product being
+    broken rather than as the wrong model being configured.
+    """
+    if llm.provider() == llm.OLLAMA:
+        try:
+            print(f"{OK} {OllamaClient(OLLAMA_MODEL).check()}")
+            return True
+        except OllamaError as e:
+            print(f"{FAIL} Ollama\n        {e}")
+            return False
+
     try:
-        print(f"{OK} {OllamaClient(OLLAMA_MODEL).check()}")
-        return True
+        client = llm.build_client()
     except OllamaError as e:
-        print(f"{FAIL} Ollama\n        {e}")
+        print(f"{FAIL} Model endpoint\n        {e}")
         return False
 
+    try:
+        names = [m["model"] for m in client.list().get("models", []) if m.get("model")]
+        print(f"{OK} Model endpoint answered: {len(names)} model(s) offered")
+        if names and OPENAI_MODEL not in names:
+            # Not fatal - plenty of endpoints list nothing useful - but it is
+            # the commonest cause of a 404 on the first question anybody asks.
+            print(f"        note: {OPENAI_MODEL!r} is not in the list; "
+                  f"first few are {', '.join(names[:5])}")
+    except OllamaError as e:
+        print(f"{FAIL} Model endpoint\n        {e}")
+        return False
 
-def main():
+    return _check_tool_calling(client)
+
+
+def _check_tool_calling(client):
+    """One tiny call, asking the model to use a tool. Costs a few tokens."""
+    try:
+        response = client.chat(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user",
+                       "content": "Call the report_ok tool. Say nothing else."}],
+            tools=PROBE_TOOL,
+            options={"temperature": 0},
+        )
+    except OllamaError as e:
+        print(f"{FAIL} Asking {OPENAI_MODEL!r} for a tool call\n        {e}")
+        return False
+
+    if (response.get("message") or {}).get("tool_calls"):
+        print(f"{OK} {OPENAI_MODEL!r} answered and called a tool")
+        return True
+
+    print(f"{FAIL} {OPENAI_MODEL!r} answered but did not call the tool it was "
+          f"asked to.\n        The assistant is a tool-calling loop; a model "
+          f"that ignores tools will talk\n        fluently and build nothing. "
+          f"Choose a model with tool support.")
+    return False
+
+
+# ----------------------------------------------------------------------
+# Sign-in
+# ----------------------------------------------------------------------
+
+def check_directory():
+    """Active Directory, when sign-in is delegated to it."""
+    if not directory.enabled():
+        print(f"{OK} Sign-in is local to this server (LDAP_ENABLED is off)")
+        return True
+
+    print(f"{OK} Directory configured: {directory.summary()}")
+
+    if not LDAP_BIND_USER:
+        # Without a service account there is nothing to bind as until
+        # somebody types a password, so say so rather than implying it was
+        # tested. --ldap-user is how you actually test it.
+        print("        no LDAP_BIND_USER set, so nothing was bound - run with "
+              "--ldap-user NAME to test a real sign-in")
+        return True
+
+    try:
+        # A blank password is refused before the network, by design, so this
+        # proves reachability rather than credentials.
+        directory.authenticate(LDAP_BIND_USER, None)
+    except directory.DirectoryError as e:
+        print(f"{FAIL} Reaching the directory\n        {e}")
+        return False
+
+    print(f"{OK} Directory reachable")
+    return True
+
+
+def check_user_sign_in(username):
+    """Prove one real person can sign in. The go-live check."""
+    if not directory.enabled():
+        print(f"{FAIL} --ldap-user needs LDAP_ENABLED=true")
+        return False
+
+    password = getpass.getpass(f"Windows password for {username}: ")
+    try:
+        entry = directory.authenticate(username, password)
+    except directory.DirectoryError as e:
+        print(f"{FAIL} Directory sign-in for {username!r}\n        {e}")
+        return False
+
+    if entry is None:
+        print(f"{FAIL} Directory refused {username!r} - wrong password, or the "
+              f"account is disabled or locked in AD")
+        return False
+
+    qlik_directory, qlik_user_id = directory.qlik_identity(entry)
+    print(f"{OK} {username!r} signed in as {entry['display_name'] or username}")
+    print(f"{OK} Qlik identity would be {qlik_directory}\\{qlik_user_id}")
+    if not qlik_directory:
+        print("        ^ LDAP_QLIK_DIRECTORY is not set, so this user would "
+              "share the server's connection")
+    if directory.decides_role():
+        print(f"{OK} Administrator by group membership: {directory.is_admin(entry)}")
+    return True
+
+
+def check_accounts():
+    """The accounts database, and the thing that silently costs you speed."""
+    try:
+        users.connect()
+        people = users.listing()
+    except Exception as e:
+        print(f"{FAIL} Accounts database\n        {e}")
+        return False
+
+    admins = [u for u in people if u["is_admin"] and u["active"]]
+    print(f"{OK} {len(people)} account(s), {len(admins)} active administrator(s)")
+
+    if not admins:
+        print(f"{FAIL} No active administrator - nobody can manage users.\n"
+              f"        Fix: python manage_users.py create rescue --admin")
+        return False
+
+    if not any(u["auth_source"] == users.LOCAL for u in admins):
+        print("        note: every administrator signs in through the "
+              "directory. Keep one\n        local account for when a domain "
+              "controller is unreachable.")
+
+    if QLIK_MODE == ENTERPRISE:
+        # The invisible queue: on Enterprise, anyone without a Qlik identity
+        # falls back to the shared connection AND the global lock, so they
+        # serialise against each other and nothing on screen says why.
+        missing = [u["username"] for u in people
+                   if u["active"] and not (u["qlik_directory"] and u["qlik_user_id"])]
+        if missing:
+            shown = ", ".join(missing[:8]) + (" ..." if len(missing) > 8 else "")
+            print(f"        note: {len(missing)} active account(s) have no Qlik "
+                  f"identity, so they\n        share the server's connection and "
+                  f"queue behind each other: {shown}")
+        else:
+            print(f"{OK} Every active account has its own Qlik identity")
+
+    return True
+
+
+# ----------------------------------------------------------------------
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--ldap-user", metavar="NAME",
+        help="prove one real person can sign in; prompts for their password")
+    parser.add_argument(
+        "--skip-qlik", action="store_true",
+        help="check everything else when the engine is known to be down")
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+
     print("Configuration")
     print("-" * 60)
     print(config_summary())
@@ -126,17 +327,31 @@ def main():
 
     print("Checks")
     print("-" * 60)
-    qlik_ok = check_qlik()
-    ollama_ok = check_ollama()
+    if args.skip_qlik:
+        qlik_ok = True
+        print("       (Qlik skipped)")
+    else:
+        qlik_ok = check_qlik()
+
+    model_ok = check_model()
+    directory_ok = check_directory()
+    accounts_ok = check_accounts()
+    sign_in_ok = check_user_sign_in(args.ldap_user) if args.ldap_user else True
     print()
 
-    if qlik_ok and ollama_ok:
-        print("All good - try `python main.py` or start the MCP server.")
+    if all((qlik_ok, model_ok, directory_ok, accounts_ok, sign_in_ok)):
+        print("All good.")
         return 0
-    if qlik_ok:
-        print("Qlik works. The low-level MCP tools are usable; AI design is not.")
-        return 1
-    print("Fix the Qlik connection first - nothing else works without it.")
+
+    if not qlik_ok:
+        print("Fix the Qlik connection first - nothing else works without it.")
+    elif not accounts_ok:
+        print("Qlik works, but nobody can administer this. See above.")
+    elif not model_ok:
+        print("Qlik works. The editor and Load data are usable; the assistant "
+              "is not.")
+    else:
+        print("Something above needs attention.")
     return 1
 
 

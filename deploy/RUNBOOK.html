@@ -1,0 +1,1391 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* The reset an artifact host normally supplies; a file opened off the disk
+     gets no such favour, so it carries its own. */
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; }
+</style>
+<title>Qlik AI Deployment Runbook</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;450;500;600;700&display=swap">
+
+<style>
+  /* ── Tokens ───────────────────────────────────────────────────────────
+     Light is the base. Dark is redefined twice: once for the un-stamped
+     "system" state, once for an explicit toggle. Every colour below comes
+     from a token so both states resolve as a complete set.               */
+  :root {
+    color-scheme: light;
+
+    --ground:      #f6f7f9;
+    --surface:     #ffffff;
+    --surface-2:   #eef1f5;
+    --console:     #101822;
+    --console-ink: #d7e2ee;
+
+    --line:        #dbe1e8;
+    --line-soft:   #e9edf2;
+
+    --ink:         #16202b;
+    --ink-2:       #48596b;
+    --ink-3:       #7a8b9c;
+
+    --accent:      #1f6feb;
+    --accent-ink:  #17539f;
+    --accent-soft: #e8f0fd;
+
+    --ok:          #0f7a4a;
+    --ok-soft:     #e4f4ec;
+    --warn:        #9a5b06;
+    --warn-soft:   #fbf0dd;
+    --stop:        #b3261e;
+    --stop-soft:   #fbe9e7;
+
+    --shadow: 0 1px 2px rgba(16,32,48,.05), 0 4px 14px rgba(16,32,48,.05);
+    --radius: 10px;
+  }
+
+  /* The un-stamped "system" state: only prefers-color-scheme separates the
+     two here, and an explicit light choice still has to win. Written flat
+     rather than nested, so it does not depend on CSS nesting support. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --ground:      #0e141b;
+      --surface:     #161e27;
+      --surface-2:   #1d2731;
+      --console:     #080d13;
+      --console-ink: #cfdcea;
+
+      --line:        #2a3743;
+      --line-soft:   #212c37;
+
+      --ink:         #e6edf4;
+      --ink-2:       #a9b8c7;
+      --ink-3:       #74869a;
+
+      --accent:      #6ea8fe;
+      --accent-ink:  #a9cbff;
+      --accent-soft: #14243c;
+
+      --ok:          #4ac088;
+      --ok-soft:     #10281d;
+      --warn:        #e0a95c;
+      --warn-soft:   #2c2214;
+      --stop:        #f08a80;
+      --stop-soft:   #33191a;
+
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ground:      #0e141b;
+    --surface:     #161e27;
+    --surface-2:   #1d2731;
+    --console:     #080d13;
+    --console-ink: #cfdcea;
+
+    --line:        #2a3743;
+    --line-soft:   #212c37;
+
+    --ink:         #e6edf4;
+    --ink-2:       #a9b8c7;
+    --ink-3:       #74869a;
+
+    --accent:      #6ea8fe;
+    --accent-ink:  #a9cbff;
+    --accent-soft: #14243c;
+
+    --ok:          #4ac088;
+    --ok-soft:     #10281d;
+    --warn:        #e0a95c;
+    --warn-soft:   #2c2214;
+    --stop:        #f08a80;
+    --stop-soft:   #33191a;
+
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font: 400 16px/1.65 "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Shell ────────────────────────────────────────────────────────── */
+  .shell {
+    display: grid;
+    grid-template-columns: 264px minmax(0, 1fr);
+    gap: 40px;
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 0 32px 120px;
+    align-items: start;
+  }
+  @media (max-width: 1020px) {
+    .shell { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 0 20px 80px; }
+    .rail { position: static; max-height: none; margin-bottom: 32px; }
+  }
+
+  /* ── Masthead ─────────────────────────────────────────────────────── */
+  header.top {
+    grid-column: 1 / -1;
+    padding: 56px 0 34px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 38px;
+  }
+  .eyebrow {
+    font: 600 11.5px/1 "IBM Plex Sans Condensed", ui-sans-serif, sans-serif;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 14px;
+  }
+  h1 {
+    font: 700 clamp(30px, 4.4vw, 46px)/1.08 "IBM Plex Sans Condensed", ui-sans-serif, sans-serif;
+    letter-spacing: -.012em;
+    margin: 0 0 16px;
+    text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 17.5px;
+    line-height: 1.6;
+    color: var(--ink-2);
+    max-width: 66ch;
+    margin: 0;
+  }
+  .standfirst strong { color: var(--ink); font-weight: 600; }
+
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    margin-top: 24px;
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    font: 500 12.5px/1 "IBM Plex Sans", sans-serif;
+    color: var(--ink-2);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 7px 13px;
+  }
+  .chip b { color: var(--ink); font-weight: 600; }
+
+  /* ── Progress rail ────────────────────────────────────────────────── */
+  .rail {
+    position: sticky;
+    top: 24px;
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 18px 16px;
+  }
+  .rail h2 {
+    font: 600 11px/1 "IBM Plex Sans Condensed", sans-serif;
+    letter-spacing: .15em; text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 14px;
+  }
+  .progress-bar {
+    height: 5px; border-radius: 999px;
+    background: var(--surface-2);
+    overflow: hidden; margin-bottom: 6px;
+  }
+  .progress-fill {
+    height: 100%; width: 0%;
+    background: var(--ok);
+    transition: width .35s ease;
+  }
+  .progress-text {
+    font: 500 12px/1 "IBM Plex Mono", monospace;
+    color: var(--ink-3);
+    margin-bottom: 16px;
+    font-variant-numeric: tabular-nums;
+  }
+  .rail ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+  .rail a {
+    display: grid;
+    grid-template-columns: 26px minmax(0,1fr);
+    align-items: baseline;
+    gap: 8px;
+    padding: 7px 8px;
+    border-radius: 7px;
+    text-decoration: none;
+    color: var(--ink-2);
+    font-size: 13.5px;
+    line-height: 1.35;
+  }
+  .rail a:hover { background: var(--surface-2); color: var(--ink); }
+  .rail a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .rail a .n {
+    font: 600 11.5px/1.5 "IBM Plex Mono", monospace;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+  .rail a.done .n::after { content: "✓"; color: var(--ok); margin-left: 2px; }
+  .rail a.done { color: var(--ink-3); }
+  .rail a.done .t { text-decoration: line-through; text-decoration-color: var(--ink-3); }
+
+  .rail .reset {
+    margin-top: 14px; width: 100%;
+    font: 500 12px/1 "IBM Plex Sans", sans-serif;
+    color: var(--ink-3);
+    background: none; border: 1px solid var(--line);
+    border-radius: 7px; padding: 8px; cursor: pointer;
+  }
+  .rail .reset:hover { color: var(--stop); border-color: var(--stop); }
+
+  /* ── Phases ───────────────────────────────────────────────────────── */
+  .phase { margin-bottom: 52px; scroll-margin-top: 24px; }
+  .phase-head {
+    display: grid;
+    grid-template-columns: auto minmax(0,1fr);
+    gap: 16px;
+    align-items: baseline;
+    margin-bottom: 6px;
+  }
+  .phase-num {
+    font: 700 13px/1 "IBM Plex Mono", monospace;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 6px;
+    padding: 7px 9px;
+    font-variant-numeric: tabular-nums;
+  }
+  .phase h2 {
+    font: 600 clamp(21px, 2.6vw, 27px)/1.2 "IBM Plex Sans Condensed", sans-serif;
+    letter-spacing: -.008em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .phase-why {
+    color: var(--ink-2);
+    font-size: 15.5px;
+    margin: 0 0 22px;
+    padding-left: 46px;
+    max-width: 70ch;
+  }
+  @media (max-width: 620px) { .phase-why { padding-left: 0; } }
+
+  .steps { display: grid; gap: 14px; }
+
+  .step {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .step-top {
+    display: grid;
+    grid-template-columns: auto minmax(0,1fr);
+    gap: 13px;
+    padding: 16px 18px;
+    align-items: start;
+  }
+  .step input[type="checkbox"] {
+    appearance: none;
+    width: 20px; height: 20px;
+    margin: 2px 0 0;
+    border: 1.5px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface);
+    cursor: pointer;
+    flex: none;
+    display: grid; place-content: center;
+    transition: background .15s, border-color .15s;
+  }
+  .step input[type="checkbox"]::after {
+    content: "";
+    width: 10px; height: 6px;
+    border-left: 2px solid var(--surface);
+    border-bottom: 2px solid var(--surface);
+    transform: rotate(-45deg) translateY(-1px);
+    opacity: 0;
+  }
+  .step input[type="checkbox"]:checked {
+    background: var(--ok); border-color: var(--ok);
+  }
+  .step input[type="checkbox"]:checked::after { opacity: 1; }
+  .step input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .step-body { min-width: 0; }
+  .step-title {
+    font-weight: 600; font-size: 15.5px;
+    margin: 0 0 4px; line-height: 1.4;
+  }
+  .step p { margin: 0 0 10px; color: var(--ink-2); font-size: 14.5px; }
+  .step p:last-child { margin-bottom: 0; }
+  .step.done .step-title { color: var(--ink-3); }
+
+  /* ── Console blocks ───────────────────────────────────────────────── */
+  .cmd {
+    position: relative;
+    background: var(--console);
+    border-radius: 8px;
+    margin: 0 0 10px;
+    overflow: hidden;
+  }
+  .cmd-label {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 12px;
+    border-bottom: 1px solid rgba(255,255,255,.07);
+    font: 500 10.5px/1 "IBM Plex Sans Condensed", sans-serif;
+    letter-spacing: .13em; text-transform: uppercase;
+    color: #7d93ab;
+  }
+  .cmd pre {
+    margin: 0; padding: 13px 14px;
+    overflow-x: auto;
+    font: 400 13.2px/1.62 "IBM Plex Mono", ui-monospace, monospace;
+    color: var(--console-ink);
+  }
+  .cmd .c { color: #6f88a2; }
+  .cmd .p { color: #7fb2f5; }
+  .cmd .s { color: #96d6a8; }
+  .copy {
+    font: 500 10.5px/1 "IBM Plex Sans", sans-serif;
+    letter-spacing: .06em; text-transform: uppercase;
+    color: #7d93ab; background: none;
+    border: 1px solid rgba(255,255,255,.14);
+    border-radius: 5px; padding: 4px 8px; cursor: pointer;
+  }
+  .copy:hover { color: #cfe0f2; border-color: rgba(255,255,255,.32); }
+  .copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .expect {
+    background: var(--surface-2);
+    border-left: 2px solid var(--ok);
+    border-radius: 0 6px 6px 0;
+    padding: 10px 13px;
+    margin: 0 0 10px;
+    font: 400 13px/1.6 "IBM Plex Mono", monospace;
+    color: var(--ink-2);
+    overflow-x: auto;
+    white-space: pre-wrap;
+  }
+  .expect b { color: var(--ok); font-weight: 600; }
+
+  /* ── Callouts ─────────────────────────────────────────────────────── */
+  .note {
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: 0 0 10px;
+    font-size: 14.2px;
+    line-height: 1.58;
+    border-left: 3px solid;
+  }
+  .note :is(p):last-child { margin-bottom: 0; }
+  .note .lab {
+    display: block;
+    font: 600 10.5px/1 "IBM Plex Sans Condensed", sans-serif;
+    letter-spacing: .14em; text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .note.warn { background: var(--warn-soft); border-color: var(--warn); color: var(--ink); }
+  .note.warn .lab { color: var(--warn); }
+  .note.stop { background: var(--stop-soft); border-color: var(--stop); color: var(--ink); }
+  .note.stop .lab { color: var(--stop); }
+  .note.info { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+  .note.info .lab { color: var(--accent-ink); }
+
+  /* ── Tables ───────────────────────────────────────────────────────── */
+  .tablewrap {
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+  table { width: 100%; border-collapse: collapse; min-width: 520px; }
+  th, td {
+    text-align: left; padding: 11px 14px;
+    border-bottom: 1px solid var(--line-soft);
+    font-size: 14.2px; vertical-align: top;
+  }
+  th {
+    font: 600 10.5px/1.3 "IBM Plex Sans Condensed", sans-serif;
+    letter-spacing: .13em; text-transform: uppercase;
+    color: var(--ink-3); background: var(--surface-2);
+    white-space: nowrap;
+  }
+  tr:last-child td { border-bottom: none; }
+  td code, p code, li code, .step-title code {
+    font: 500 13px/1.4 "IBM Plex Mono", monospace;
+    background: var(--surface-2);
+    border-radius: 4px; padding: 1.5px 5px;
+    color: var(--accent-ink);
+    word-break: break-word;
+  }
+
+  .fill {
+    font: 500 12.5px "IBM Plex Mono", monospace;
+    color: var(--warn); background: var(--warn-soft);
+    border: 1px dashed var(--warn);
+    border-radius: 4px; padding: 1px 6px;
+  }
+
+  ul.tight { margin: 0 0 10px; padding-left: 19px; }
+  ul.tight li { margin-bottom: 5px; color: var(--ink-2); font-size: 14.5px; }
+  ul.tight li::marker { color: var(--ink-3); }
+
+  footer.end {
+    grid-column: 1 / -1;
+    margin-top: 26px; padding-top: 26px;
+    border-top: 1px solid var(--line);
+    color: var(--ink-3); font-size: 13.5px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+
+
+<div class="shell">
+
+  <header class="top">
+    <p class="eyebrow">Qlik AI · Windows Server</p>
+    <h1>Deployment Runbook</h1>
+    <p class="standfirst">
+      Every step, in the order it has to happen. Work top to bottom — each phase
+      assumes the one before it succeeded. <strong>Your progress is saved in this
+      browser</strong>, so you can stop and come back.
+    </p>
+    <div class="meta">
+      <span class="chip"><b>10</b> phases</span>
+      <span class="chip"><b>~3 hrs</b> first time</span>
+      <span class="chip"><b>Reference:</b> DEPLOYMENT.md</span>
+      <span class="chip"><b>Rollback:</b> phase 10</span>
+    </div>
+  </header>
+
+  <nav class="rail" aria-label="Progress">
+    <h2>Progress</h2>
+    <div class="progress-bar"><div class="progress-fill" id="fill"></div></div>
+    <div class="progress-text" id="ptext">0 of 0 done</div>
+    <ol id="railList"></ol>
+    <button class="reset" id="reset" type="button">Clear all ticks</button>
+  </nav>
+
+  <main>
+
+    <!-- ─────────────────────────────────────────── 0 -->
+    <section class="phase" id="p0">
+      <div class="phase-head">
+        <span class="phase-num">00</span>
+        <h2>Collect these before you start</h2>
+      </div>
+      <p class="phase-why">
+        Every one of these comes from somebody else — the Qlik team, the AD team,
+        whoever runs your certificate authority. Chasing them mid-install is what
+        turns a two-hour job into a two-day one. Get all nine first.
+      </p>
+      <div class="steps">
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p0a">
+          <div class="step-body">
+            <p class="step-title">Qlik engine hostname — the name on its certificate</p>
+            <p>Not an IP address and not an alias. The engine's certificate is issued
+            to the server's hostname, so anything else fails TLS verification. This is
+            the single commonest first-day failure.</p>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p0b">
+          <div class="step-body">
+            <p class="step-title">Qlik certificates from the QMC</p>
+            <p>QMC → <b>Certificates → Export certificates</b>, choosing the
+            <b>platform-independent .pem</b> format. You need three files:
+            <code>client.pem</code>, <code>client_key.pem</code>, <code>root.pem</code>.</p>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p0c">
+          <div class="step-body">
+            <p class="step-title">A Qlik service account with QMC access</p>
+            <p>Its user directory and user id. This is the fallback identity for
+            anyone without a Qlik account of their own.</p>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p0d">
+          <div class="step-body">
+            <p class="step-title">Qlik access passes — one per user</p>
+            <p>Each person who signs in opens a Qlik session <em>as themselves</em>,
+            which consumes a pass. 300 users means 300 passes.</p>
+            <div class="note warn"><span class="lab">Get this costed first</span>
+            This is a licence conversation, not a technical one, and it has stopped
+            rollouts at the last minute before.</div>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p0e">
+          <div class="step-body">
+            <p class="step-title">Your Qwen endpoint: URL, key, model name</p>
+            <p>The API root including the version prefix — for example
+            <code>https://qwen.internal/v1</code> — plus the key if it needs one,
+            and the exact model name.</p>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p0f">
+          <div class="step-body">
+            <p class="step-title">Active Directory details</p>
+            <ul class="tight">
+              <li>Domain controller hostname, reachable on <b>636</b> (LDAPS)</li>
+              <li>UPN suffix — the part after the @, e.g. <code>bank.internal</code></li>
+              <li>NetBIOS domain name, e.g. <code>BANK</code></li>
+              <li>Base DN, e.g. <code>DC=bank,DC=internal</code></li>
+            </ul>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p0g">
+          <div class="step-body">
+            <p class="step-title">What the QMC calls your AD user directory</p>
+            <div class="note warn"><span class="lab">Easy to get wrong</span>
+            This is the name of the <em>QMC's connector</em>, not a fact about Active
+            Directory. It is usually the NetBIOS domain — but if it isn't, Qlik
+            sessions open as a user the QMC has never heard of, and it surfaces as a
+            <em>permissions</em> error rather than a configuration one. Check it in
+            the QMC now.</div>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p0h">
+          <div class="step-body">
+            <p class="step-title">A DNS name for this server, and a TLS certificate for it</p>
+            <p>e.g. <code>qlikai.bank.internal</code>, resolving to this machine. The
+            certificate must be issued to that exact name — ask whoever runs your
+            internal CA. Most banks run AD Certificate Services and this is routine.</p>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p0i">
+          <div class="step-body">
+            <p class="step-title">Firewall openings, outbound from this server</p>
+            <div class="tablewrap"><table>
+              <thead><tr><th>To</th><th>Port</th><th>For</th></tr></thead>
+              <tbody>
+                <tr><td>Qlik engine</td><td>4747</td><td>The Engine API</td></tr>
+                <tr><td>Domain controller</td><td>636</td><td>LDAPS sign-in</td></tr>
+                <tr><td>Model endpoint</td><td>443</td><td>The assistant</td></tr>
+              </tbody>
+            </table></div>
+          </div>
+        </div></label>
+
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────────────── 1 -->
+    <section class="phase" id="p1">
+      <div class="phase-head">
+        <span class="phase-num">01</span>
+        <h2>Install the prerequisites</h2>
+      </div>
+      <p class="phase-why">
+        Four things, all on the server. None of them needs a C compiler — that is
+        deliberate, so nothing here requires build tools on a locked-down machine.
+      </p>
+      <div class="steps">
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p1a">
+          <div class="step-body">
+            <p class="step-title">Python 3.10 or later — 3.12 recommended</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell — check what is installed</span><button class="copy" type="button">Copy</button></div>
+              <pre>py -0p</pre>
+            </div>
+            <p>If nothing is there, install from python.org and tick
+            <b>“Add python.exe to PATH”</b>.</p>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p1b">
+          <div class="step-body">
+            <p class="step-title">IIS — the reverse proxy that will hold your certificate</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell — as administrator</span><button class="copy" type="button">Copy</button></div>
+              <pre>Install-WindowsFeature -Name Web-Server -IncludeManagementTools</pre>
+            </div>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p1c">
+          <div class="step-body">
+            <p class="step-title">URL Rewrite, then ARR — in that order</p>
+            <p>Two small MSI downloads from Microsoft. IIS cannot reverse-proxy
+            without them, and ARR depends on URL Rewrite, so install URL Rewrite first.</p>
+            <ul class="tight">
+              <li><b>URL Rewrite 2.1</b> — iis.net/downloads/microsoft/url-rewrite</li>
+              <li><b>Application Request Routing 3.0</b> — iis.net/downloads/microsoft/application-request-routing</li>
+            </ul>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p1d">
+          <div class="step-body">
+            <p class="step-title">NSSM — the service wrapper</p>
+            <p>Download <code>nssm.exe</code> from nssm.cc/download and put it in the
+            project's <code>deploy\</code> folder, or anywhere on PATH. Python is not a
+            service host; without a wrapper the server runs only while somebody is
+            logged in with a console open.</p>
+          </div>
+        </div></label>
+
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────────────── 2 -->
+    <section class="phase" id="p2">
+      <div class="phase-head">
+        <span class="phase-num">02</span>
+        <h2>Put the code on the server</h2>
+      </div>
+      <p class="phase-why">
+        Then prove the install is sound before it has anything to connect to — a
+        failing test suite here means a broken Python environment, which is far
+        easier to see now than tangled up with a certificate problem later.
+      </p>
+      <div class="steps">
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p2a">
+          <div class="step-body">
+            <p class="step-title">Copy the project and create its environment</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell</span><button class="copy" type="button">Copy</button></div>
+<pre><span class="c"># put the project at C:\apps\qlikai, then:</span>
+cd C:\apps\qlikai
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt</pre>
+            </div>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p2b">
+          <div class="step-body">
+            <p class="step-title">Run the test suite</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell</span><button class="copy" type="button">Copy</button></div>
+<pre>.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest</pre>
+            </div>
+            <div class="expect"><b>Expect:</b> 1459 passed
+No Qlik, no model and no directory are needed — the suite runs against fakes.</div>
+            <p>Anything failing here is the Python environment, not your
+            configuration. Fix it before going on.</p>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p2c">
+          <div class="step-body">
+            <p class="step-title">Create the data folders</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell — as administrator</span><button class="copy" type="button">Copy</button></div>
+<pre>New-Item -ItemType Directory -Force C:\ProgramData\QlikAI\certs
+New-Item -ItemType Directory -Force C:\ProgramData\QlikAI\history
+New-Item -ItemType Directory -Force C:\ProgramData\QlikAI\logs</pre>
+            </div>
+          </div>
+        </div></label>
+
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────────────── 3 -->
+    <section class="phase" id="p3">
+      <div class="phase-head">
+        <span class="phase-num">03</span>
+        <h2>Install the Qlik certificates</h2>
+      </div>
+      <p class="phase-why">
+        This app talks straight to the Engine API on 4747, bypassing the Qlik proxy.
+        That needs the server's own certificates — and they are credentials, so they
+        get locked down like credentials.
+      </p>
+      <div class="steps">
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p3a">
+          <div class="step-body">
+            <p class="step-title">Copy the three .pem files in</p>
+            <p>Put <code>client.pem</code>, <code>client_key.pem</code> and
+            <code>root.pem</code> into <code>C:\ProgramData\QlikAI\certs</code>.</p>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p3b">
+          <div class="step-body">
+            <p class="step-title">Lock the folder down</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell — as administrator</span><button class="copy" type="button">Copy</button></div>
+<pre>$dir = "C:\ProgramData\QlikAI\certs"
+icacls $dir /inheritance:r
+icacls $dir /grant "<span class="p">DOMAIN\svc_qlikai</span>:(OI)(CI)R"
+icacls $dir /grant "Administrators:(OI)(CI)F"</pre>
+            </div>
+            <p>Replace <span class="fill">DOMAIN\svc_qlikai</span> with the Windows
+            account the service will run as. It needs <b>read only</b>.</p>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p3c">
+          <div class="step-body">
+            <p class="step-title">Prove the engine is reachable</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell</span><button class="copy" type="button">Copy</button></div>
+<pre>Test-NetConnection <span class="p">qlik-engine.bank.internal</span> -Port 4747</pre>
+            </div>
+            <div class="expect"><b>Expect:</b> TcpTestSucceeded : True</div>
+            <p>False means a firewall or the wrong hostname. Solve it here, not later.</p>
+          </div>
+        </div></label>
+
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────────────── 4 -->
+    <section class="phase" id="p4">
+      <div class="phase-head">
+        <span class="phase-num">04</span>
+        <h2>Configure</h2>
+      </div>
+      <p class="phase-why">
+        Start from the production template. Every value you supply is marked with
+        angle brackets; everything else already has a working default.
+      </p>
+      <div class="steps">
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p4a">
+          <div class="step-body">
+            <p class="step-title">Copy the template and fill it in</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell</span><button class="copy" type="button">Copy</button></div>
+<pre>cd C:\apps\qlikai
+Copy-Item deploy\production.env.template .env
+notepad .env</pre>
+            </div>
+            <p>Replace every <span class="fill">&lt;ANGLE BRACKET&gt;</span> using
+            what you collected in phase 00. Leave <code>COOKIE_SECURE=false</code> for
+            now — phase 08 turns it on.</p>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p4b">
+          <div class="step-body">
+            <p class="step-title">Set the thread ceiling for your user count</p>
+            <p>This is the setting that decides how many people can use it at once.
+            Size it for people <em>mid-question</em> at once, not for the number of accounts.</p>
+            <div class="tablewrap"><table>
+              <thead><tr><th>Situation</th><th>WORKER_THREADS</th><th>LLM_MAX_CONNECTIONS</th></tr></thead>
+              <tbody>
+                <tr><td>300 accounts, ~30 asking at once</td><td>64</td><td>100</td></tr>
+                <tr><td>300 accounts, ~100 asking at once</td><td>192</td><td>200</td></tr>
+                <tr><td>300 genuinely simultaneous</td><td>400</td><td>400</td></tr>
+              </tbody>
+            </table></div>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p4c">
+          <div class="step-body">
+            <p class="step-title">Lock down .env</p>
+            <p>It holds the model API key and possibly a service-account password.</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell — as administrator</span><button class="copy" type="button">Copy</button></div>
+<pre>icacls C:\apps\qlikai\.env /inheritance:r
+icacls C:\apps\qlikai\.env /grant "<span class="p">DOMAIN\svc_qlikai</span>:R"
+icacls C:\apps\qlikai\.env /grant "Administrators:F"
+
+<span class="c"># and confirm it never got committed — this must print nothing</span>
+git ls-files .env</pre>
+            </div>
+          </div>
+        </div></label>
+
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────────────── 5 -->
+    <section class="phase" id="p5">
+      <div class="phase-head">
+        <span class="phase-num">05</span>
+        <h2>Verify before starting anything</h2>
+      </div>
+      <p class="phase-why">
+        This is the phase that saves the day. It tests all four dependencies
+        separately, so you learn <em>which</em> one is wrong instead of watching the
+        whole thing fail at once.
+      </p>
+      <div class="steps">
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p5a">
+          <div class="step-body">
+            <p class="step-title">Run the preflight</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell</span><button class="copy" type="button">Copy</button></div>
+<pre>.\.venv\Scripts\python.exe check_connection.py</pre>
+            </div>
+            <div class="expect"><b>Expect, roughly:</b>
+  ok    Connected to the Qlik Engine (enterprise mode)
+  ok    Opened app 'Deposits'
+  ok    Model endpoint answered: 3 model(s) offered
+  ok    'qwen3-max' answered and called a tool
+  ok    Directory configured: dc01…:636 (LDAPS)
+  ok    1 account(s), 1 active administrator(s)</div>
+            <div class="note info"><span class="lab">Why it asks the model for a tool call</span>
+            “The endpoint answers” and “this model can drive the assistant” are
+            different questions. The assistant is a tool-calling loop — a model that
+            ignores tools talks fluently and builds nothing.</div>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p5b">
+          <div class="step-body">
+            <p class="step-title">Fix whatever it named</p>
+            <div class="tablewrap"><table>
+              <thead><tr><th>It says</th><th>Usually means</th></tr></thead>
+              <tbody>
+                <tr><td>Qlik connection failed</td><td>Wrong <code>QLIK_HOST</code>, a firewall, or certs that don't match this server</td></tr>
+                <tr><td>Certificate verify failed</td><td>You used an IP or an alias. It must be the hostname on the cert</td></tr>
+                <tr><td>Could not open app</td><td>Wrong <code>APP_NAME</code>, or the service account has no QMC access to it</td></tr>
+                <tr><td>Endpoint rejected the API key</td><td><code>OPENAI_API_KEY</code></td></tr>
+                <tr><td>No such model (404)</td><td><code>OPENAI_MODEL</code>, or <code>OPENAI_BASE_URL</code> missing its <code>/v1</code></td></tr>
+                <tr><td>Model did not call the tool</td><td>That model has no tool support — pick another</td></tr>
+                <tr><td>Could not reach the directory</td><td><code>LDAP_SERVER</code>, port 636, or the DC's certificate</td></tr>
+              </tbody>
+            </table></div>
+          </div>
+        </div></label>
+
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────────────── 6 -->
+    <section class="phase" id="p6">
+      <div class="phase-head">
+        <span class="phase-num">06</span>
+        <h2>First run, in the foreground</h2>
+      </div>
+      <p class="phase-why">
+        Run it by hand once, where you can see it. Anything still wrong is wrong here,
+        in front of you, rather than buried in a service that will not start.
+      </p>
+      <div class="steps">
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p6a">
+          <div class="step-body">
+            <p class="step-title">Start it</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell</span><button class="copy" type="button">Copy</button></div>
+<pre>.\.venv\Scripts\python.exe web_app.py</pre>
+            </div>
+            <div class="expect"><b>Expect:</b>
+  Qlik AI      -> http://127.0.0.1:8000
+  Admin        -> http://127.0.0.1:8000/admin
+  MCP endpoint -> http://127.0.0.1:8000/mcp
+  app 'Deposits' (enterprise), model qwen3-max
+  sign-in required</div>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p6b">
+          <div class="step-body">
+            <p class="step-title">Write down the administrator password</p>
+            <div class="note stop"><span class="lab">Shown once, never again</span>
+            If you left <code>ADMIN_PASSWORD</code> blank, this first run prints a
+            generated password in a box. It is stored only as a hash — nothing can
+            read it back. Copy it somewhere safe <em>now</em>.</div>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p6c">
+          <div class="step-body">
+            <p class="step-title">Sign in from a browser on the server</p>
+            <p>Open <code>http://127.0.0.1:8000</code>. You should land on the login
+            page, get in with <code>admin</code> and that password, and see the load
+            editor with your app's script in it.</p>
+            <p>Then press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop it.</p>
+          </div>
+        </div></label>
+
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────────────── 7 -->
+    <section class="phase" id="p7">
+      <div class="phase-head">
+        <span class="phase-num">07</span>
+        <h2>Install it as a Windows service</h2>
+      </div>
+      <p class="phase-why">
+        So it starts with the machine and survives a patch reboot at 2am with nobody
+        logged in.
+      </p>
+      <div class="steps">
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p7a">
+          <div class="step-body">
+            <p class="step-title">Install and start</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell — as administrator</span><button class="copy" type="button">Copy</button></div>
+<pre>cd C:\apps\qlikai\deploy
+.\install-service.ps1 -ListenHost 127.0.0.1 -Port 8000 `
+      -Account "<span class="p">DOMAIN\svc_qlikai</span>" -Password (Read-Host -AsSecureString)
+
+nssm start QlikAI</pre>
+            </div>
+            <div class="note warn"><span class="lab">Keep it on 127.0.0.1</span>
+            Loopback only, so nothing but the IIS proxy on this machine can reach it.
+            Binding to <code>0.0.0.0</code> would let people skip the TLS you are about
+            to set up, which makes the certificate decorative.</div>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p7b">
+          <div class="step-body">
+            <p class="step-title">Confirm it came up</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell</span><button class="copy" type="button">Copy</button></div>
+<pre>Invoke-WebRequest http://127.0.0.1:8000/healthz -UseBasicParsing
+Get-Content C:\ProgramData\QlikAI\logs\qlik-ai.log -Wait -Tail 40</pre>
+            </div>
+            <div class="expect"><b>Expect:</b> StatusCode : 200</div>
+          </div>
+        </div></label>
+
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────────────── 8 -->
+    <section class="phase" id="p8">
+      <div class="phase-head">
+        <span class="phase-num">08</span>
+        <h2>Put TLS in front</h2>
+      </div>
+      <p class="phase-why">
+        IIS takes port 443, holds the certificate, and forwards inward to
+        127.0.0.1:8000. The app never sees the certificate — holding one is not an
+        application server's job.
+      </p>
+      <div class="steps">
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p8a">
+          <div class="step-body">
+            <p class="step-title">Understand why this one is not optional</p>
+            <div class="note stop"><span class="lab">It is their Windows password</span>
+            Without TLS, everything typed into the login form crosses the network in
+            clear text. With Active Directory sign-in that is not this app's
+            password — it is the user's <b>Windows domain password</b>, on the wire,
+            on every sign-in, readable by anyone who can see the traffic.</div>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p8b">
+          <div class="step-body">
+            <p class="step-title">Import the certificate and find its thumbprint</p>
+            <p>Double-click the <code>.pfx</code>, choose <b>Local Machine</b>, and let
+            it go to Personal. Then:</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell — as administrator</span><button class="copy" type="button">Copy</button></div>
+<pre>Get-ChildItem Cert:\LocalMachine\My | Format-List Subject, Thumbprint</pre>
+            </div>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p8c">
+          <div class="step-body">
+            <p class="step-title">Run the IIS setup script</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell — as administrator</span><button class="copy" type="button">Copy</button></div>
+<pre>cd C:\apps\qlikai\deploy
+.\setup-iis.ps1 -HostName <span class="p">qlikai.bank.internal</span> `
+                -CertificateThumbprint <span class="p">A1B2C3D4E5F6…</span></pre>
+            </div>
+            <p>It creates the site, binds the certificate, enables the proxy, writes
+            the forwarding rule, redirects HTTP to HTTPS, and opens the firewall.</p>
+            <div class="note info"><span class="lab">Two things it handles for you</span>
+            <b>Response buffering off</b> — chat replies stream as server-sent events,
+            and ARR buffers by default, which would hold each answer until it finished
+            and look exactly like the model hanging. And <b>X-Forwarded-For</b>, which
+            is what the audit trail records as the caller's address.</div>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p8d">
+          <div class="step-body">
+            <p class="step-title">Now — and only now — turn on the secure cookie</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>.env, then restart</span><button class="copy" type="button">Copy</button></div>
+<pre>COOKIE_SECURE=true</pre>
+            </div>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell</span><button class="copy" type="button">Copy</button></div>
+<pre>nssm restart QlikAI
+Invoke-WebRequest https://<span class="p">qlikai.bank.internal</span>/healthz -UseBasicParsing</pre>
+            </div>
+            <div class="note warn"><span class="lab">Order matters here</span>
+            A Secure cookie is never sent over plain HTTP. Set this before IIS is
+            working and every login appears to succeed while every following request
+            arrives signed out — which reads as a broken login, not a
+            misconfiguration.</div>
+          </div>
+        </div></label>
+
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────────────── 9 -->
+    <section class="phase" id="p9">
+      <div class="phase-head">
+        <span class="phase-num">09</span>
+        <h2>Prove a real person can sign in</h2>
+      </div>
+      <p class="phase-why">
+        Accounts create themselves on first sign-in, with the Qlik identity taken from
+        Active Directory. What you are checking is that the identity it derives is the
+        one Qlik expects.
+      </p>
+      <div class="steps">
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p9a">
+          <div class="step-body">
+            <p class="step-title">Test one real account</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell — prompts for their password</span><button class="copy" type="button">Copy</button></div>
+<pre>.\.venv\Scripts\python.exe check_connection.py --ldap-user <span class="p">jsmith</span></pre>
+            </div>
+            <div class="expect"><b>Expect:</b>
+  ok    'jsmith' signed in as J Smith
+  ok    Qlik identity would be BANK\jsmith</div>
+            <p>That second line is the one that matters. If the directory is blank or
+            wrong, fix <code>LDAP_QLIK_DIRECTORY</code> before anyone else signs in.</p>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p9b">
+          <div class="step-body">
+            <p class="step-title">Have that person sign in through the browser</p>
+            <p>At <code>https://qlikai.bank.internal</code>, with their Windows
+            username and password. They should reach the app and see their own
+            empty chat history.</p>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p9c">
+          <div class="step-body">
+            <p class="step-title">Keep one local administrator for emergencies</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell</span><button class="copy" type="button">Copy</button></div>
+<pre>.\.venv\Scripts\python.exe manage_users.py create breakglass --admin
+.\.venv\Scripts\python.exe manage_users.py list</pre>
+            </div>
+            <p>A <b>local</b> account, so somebody can still get in when a domain
+            controller is unreachable. The <code>SIGN-IN</code> column shows
+            <code>AD</code> or <code>local</code> for each person.</p>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p9d">
+          <div class="step-body">
+            <p class="step-title">Check nobody is missing a Qlik identity</p>
+            <div class="note warn"><span class="lab">The invisible queue</span>
+            A user <em>with</em> a Qlik identity gets their own engine session and their
+            own lock. A user <em>without</em> one falls back to the shared connection
+            <b>and the global lock</b>, so all such users queue behind each other. It
+            never shows up as an error — only as “the assistant is slow”.
+            <code>check_connection.py</code> lists anyone affected.</div>
+          </div>
+        </div></label>
+
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────────────── 10 -->
+    <section class="phase" id="p10">
+      <div class="phase-head">
+        <span class="phase-num">10</span>
+        <h2>Hand over to operations</h2>
+      </div>
+      <p class="phase-why">
+        Four things the people who keep this running need to know about.
+      </p>
+      <div class="steps">
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p10a">
+          <div class="step-body">
+            <p class="step-title">Back up two things — and only two</p>
+            <div class="tablewrap"><table>
+              <thead><tr><th>Path</th><th>Holds</th></tr></thead>
+              <tbody>
+                <tr><td><code>C:\ProgramData\QlikAI\users.db</code></td><td>Accounts, sessions, the audit trail</td></tr>
+                <tr><td><code>C:\ProgramData\QlikAI\history\</code></td><td>Every saved conversation</td></tr>
+              </tbody>
+            </table></div>
+            <p>Everything else is rebuilt from the checkout. SQLite runs in WAL mode,
+            so copy <code>users.db</code>, <code>-wal</code> and <code>-shm</code>
+            together, or stop the service first.</p>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p10b">
+          <div class="step-body">
+            <p class="step-title">Decide the retention policy</p>
+            <p>Both files hold customer figures by implication. Kept forever unless
+            you say otherwise — deliberately, because silently deleting a bank's audit
+            trail is a worse failure than keeping too much.</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>.env</span><button class="copy" type="button">Copy</button></div>
+<pre>AUDIT_RETENTION_DAYS=0
+HISTORY_RETENTION_DAYS=0</pre>
+            </div>
+            <div class="cmd">
+              <div class="cmd-label"><span>Try it before you mean it</span><button class="copy" type="button">Copy</button></div>
+<pre>.\.venv\Scripts\python.exe manage_users.py prune --audit-days 365 --dry-run</pre>
+            </div>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p10c">
+          <div class="step-body">
+            <p class="step-title">Know the recovery path</p>
+            <p>Five failed sign-ins lock an account. If that is your only
+            administrator, the admin page is behind the login refusing you:</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell — works with the service up or down</span><button class="copy" type="button">Copy</button></div>
+<pre>.\.venv\Scripts\python.exe manage_users.py unlock admin
+.\.venv\Scripts\python.exe manage_users.py password admin
+.\.venv\Scripts\python.exe manage_users.py create rescue --admin</pre>
+            </div>
+          </div>
+        </div></label>
+
+        <label class="step"><div class="step-top">
+          <input type="checkbox" data-k="p10d">
+          <div class="step-body">
+            <p class="step-title">Rollback, if it comes to that</p>
+            <div class="cmd">
+              <div class="cmd-label"><span>PowerShell — as administrator</span><button class="copy" type="button">Copy</button></div>
+<pre>nssm stop QlikAI
+nssm remove QlikAI confirm
+Remove-Website -Name QlikAI</pre>
+            </div>
+            <p>Nothing here touches Qlik Sense itself. The app only ever opened
+            sessions against it; removing this leaves your Qlik installation exactly as
+            it was. Keep <code>C:\ProgramData\QlikAI</code> — it is the only thing that
+            cannot be recreated.</p>
+          </div>
+        </div></label>
+
+      </div>
+    </section>
+
+    <!-- known limits -->
+    <section class="phase" id="p11">
+      <div class="phase-head">
+        <span class="phase-num">!</span>
+        <h2>Known limits — tell whoever operates this</h2>
+      </div>
+      <p class="phase-why">
+        Stated plainly, because finding these during a UAT is worse than reading them
+        here.
+      </p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Limit</th><th>What it means</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>One process, one host</b></td>
+            <td>No clustering and no failover. Restarting drops every open Qlik session; users reconnect on their next request, but a chat turn in flight is lost. Scale the server up, not out — a second worker would give people different conversations at random.</td>
+          </tr>
+          <tr>
+            <td><b>MCP is administrators only</b></td>
+            <td>Its tool handlers cannot see which user authenticated, so every call lands in the shared session. The browser interface has no such limit.</td>
+          </tr>
+          <tr>
+            <td><b>Answers can still be wrong</b></td>
+            <td>Nothing compares a figure in the assistant's reply against what the tools returned. A hosted model reduces it; it does not remove it. Do not present its numbers as audited.</td>
+          </tr>
+          <tr>
+            <td><b>First contact will find something</b></td>
+            <td>Enterprise, Active Directory and your model endpoint have all been tested against fakes, never against your actual servers. Budget a day.</td>
+          </tr>
+        </tbody>
+      </table></div>
+    </section>
+
+  </main>
+
+  <footer class="end">
+    Full reference: <code>DEPLOYMENT.md</code> in the project root · Configuration
+    template: <code>deploy/production.env.template</code> · Scripts:
+    <code>deploy/install-service.ps1</code>, <code>deploy/setup-iis.ps1</code>
+  </footer>
+
+</div>
+
+<script>
+  // ── Progress, saved per browser ─────────────────────────────────────
+  // localStorage can throw outright in a private window or a thumbnail
+  // capture, so every read and write is guarded and the page renders fine
+  // with nothing stored.
+  const KEY = "qlikai-runbook-v1";
+
+  function load() {
+    try { return JSON.parse(localStorage.getItem(KEY) || "{}"); }
+    catch (e) { return {}; }
+  }
+  function save(state) {
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+  }
+
+  const boxes = [...document.querySelectorAll('.step input[type="checkbox"]')];
+  const state = load();
+
+  // ── Build the rail from the phases actually on the page ─────────────
+  const railList = document.getElementById("railList");
+  const phases = [...document.querySelectorAll(".phase")].map(section => ({
+    id: section.id,
+    num: section.querySelector(".phase-num").textContent.trim(),
+    title: section.querySelector("h2").textContent.trim(),
+    boxes: [...section.querySelectorAll('input[type="checkbox"]')],
+  }));
+
+  for (const phase of phases) {
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.href = "#" + phase.id;
+    a.dataset.phase = phase.id;
+    a.innerHTML = '<span class="n"></span><span class="t"></span>';
+    a.querySelector(".n").textContent = phase.num;
+    a.querySelector(".t").textContent = phase.title;
+    li.appendChild(a);
+    railList.appendChild(li);
+  }
+
+  function paint() {
+    let done = 0;
+    for (const box of boxes) {
+      box.closest(".step").classList.toggle("done", box.checked);
+      if (box.checked) done++;
+    }
+
+    const percent = boxes.length ? Math.round((done / boxes.length) * 100) : 0;
+    document.getElementById("fill").style.width = percent + "%";
+    document.getElementById("ptext").textContent =
+      done + " of " + boxes.length + " done";
+
+    for (const phase of phases) {
+      const link = railList.querySelector('[data-phase="' + phase.id + '"]');
+      if (!link) continue;
+      const complete = phase.boxes.length > 0 &&
+                       phase.boxes.every(b => b.checked);
+      link.classList.toggle("done", complete);
+    }
+  }
+
+  for (const box of boxes) {
+    box.checked = !!state[box.dataset.k];
+    box.addEventListener("change", () => {
+      state[box.dataset.k] = box.checked;
+      save(state);
+      paint();
+    });
+  }
+  paint();
+
+  document.getElementById("reset").addEventListener("click", () => {
+    for (const box of boxes) box.checked = false;
+    for (const k of Object.keys(state)) delete state[k];
+    save(state);
+    paint();
+  });
+
+  // Ticking a box should not also follow the label into a jump.
+  for (const label of document.querySelectorAll("label.step")) {
+    label.addEventListener("click", e => {
+      if (e.target.tagName === "A") e.stopPropagation();
+    });
+  }
+
+  // ── Copy buttons ────────────────────────────────────────────────────
+  for (const button of document.querySelectorAll(".copy")) {
+    button.addEventListener("click", async e => {
+      e.preventDefault();
+      const text = button.closest(".cmd").querySelector("pre").innerText;
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (err) {
+        const scratch = document.createElement("textarea");
+        scratch.value = text;
+        document.body.appendChild(scratch);
+        scratch.select();
+        try { document.execCommand("copy"); } catch (e2) {}
+        scratch.remove();
+      }
+      const was = button.textContent;
+      button.textContent = "Copied";
+      setTimeout(() => { button.textContent = was; }, 1400);
+    });
+  }
+</script>
+
+</body>
+</html>

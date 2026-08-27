@@ -351,6 +351,34 @@ class QlikEngine:
             self.sheet_id = None
             self._reset_grid()
 
+    def _drop_socket(self, why):
+        """Discard a socket the network has taken away from us.
+
+        Every transport failure has to come through here, because `connected`
+        is just `ws is not None` - so a socket that raised and was left in
+        place reports itself as healthy for the rest of the process. The
+        session layer then never reconnects, and the person sees the same
+        error on every request until somebody restarts the server. Two of the
+        three failure paths below did exactly that.
+
+        Unlike close() this does not try to close the socket: it is already
+        gone, and a close on a reset connection can block for the operating
+        system's timeout. The handles go with it for the reason close()
+        explains - they belong to an engine session that no longer exists.
+        """
+        if self.ws is None:
+            return
+        log.warning("Dropping the Qlik connection: %s", why)
+        self.ws = None
+        self.app_handle = None
+        self.app_id = None
+        self.sheet_handle = None
+        self.sheet_id = None
+        self._reset_grid()
+        # app_name is deliberately kept. It is what the session re-opens
+        # when it reconnects, and losing it turns a dropped network into
+        # "you have no app open" for somebody who never closed one.
+
     def __enter__(self):
         self.connect()
         return self
@@ -389,6 +417,7 @@ class QlikEngine:
             try:
                 self.ws.send(json.dumps(request))
             except (OSError, websocket.WebSocketException) as e:
+                self._drop_socket(f"{method} could not be sent: {e}")
                 raise QlikConnectionError(f"{method} could not be sent: {e}") from e
 
             return self._await_response(method, request_id)
@@ -407,6 +436,8 @@ class QlikEngine:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                self._drop_socket(f"{method} timed out after "
+                                  f"{self.request_timeout:g}s")
                 raise QlikConnectionError(
                     f"{method} timed out after {self.request_timeout:g}s waiting "
                     "for the engine. Raise QLIK_REQUEST_TIMEOUT if this app is "
@@ -419,16 +450,18 @@ class QlikEngine:
             except websocket.WebSocketTimeoutException:
                 continue  # loop re-checks the deadline and raises there
             except websocket.WebSocketConnectionClosedException as e:
-                self.ws = None
+                self._drop_socket(f"the engine closed the connection during {method}")
                 raise QlikConnectionError(
                     f"The engine closed the connection during {method}: {e}"
                 ) from e
-            except websocket.WebSocketException as e:
+            except (OSError, websocket.WebSocketException) as e:
+                self._drop_socket(f"{method} failed to read a reply: {e}")
                 raise QlikConnectionError(f"{method} failed to read a reply: {e}") from e
 
             try:
                 response = json.loads(raw)
             except (TypeError, ValueError) as e:
+                self._drop_socket(f"{method} got a non-JSON reply")
                 raise QlikConnectionError(
                     f"{method} got a non-JSON reply from the engine: {e}"
                 ) from e
