@@ -1,5 +1,3 @@
-"""Put a crowd through the real server and see what breaks."""
-
 import argparse
 import os
 import random
@@ -8,6 +6,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import Counter
 from pathlib import Path
 
 WORK = Path(tempfile.mkdtemp(prefix="qlikai-sim-"))
@@ -60,13 +59,6 @@ GREEN, RED, GREY, BOLD, OFF = "\033[32m", "\033[31m", "\033[90m", "\033[1m", "\0
 
 
 class Qlik:
-    """The engine, standing in for a server that is not on this machine.
-
-    It records the identity each socket was opened with, because that is the
-    single most important thing to get right on Enterprise: a session opened
-    as the wrong person shows them somebody else's apps.
-    """
-
     reachable = True
     opened = []
     lock = threading.Lock()
@@ -135,23 +127,30 @@ class Qlik:
 
 
 class Model:
-    """The assistant, answering without a GPU. Latency is deliberate."""
-
     calls = 0
     lock = threading.Lock()
 
     def chat(self, model=None, messages=None, tools=None, options=None, stream=False):
         with Model.lock:
             Model.calls += 1
-        time.sleep(random.uniform(0.05, 0.2))
         asked = next((m["content"] for m in reversed(messages or [])
                       if m.get("role") == "user"), "")
-        return {
-            "message": {"role": "assistant",
-                        "content": f"There are 1,269 deposits. You asked: {asked[:40]}",
-                        "tool_calls": []},
-            "done": True,
-        }
+        reply = f"There are 1,269 deposits. You asked: {asked[:40]}"
+
+        if not stream:
+            time.sleep(random.uniform(0.05, 0.2))
+            return {"message": {"role": "assistant", "content": reply,
+                                "tool_calls": []}, "done": True}
+
+        def word_by_word():
+            for word in reply.split():
+                time.sleep(random.uniform(0.004, 0.02))
+                yield {"message": {"role": "assistant", "content": word + " ",
+                                   "tool_calls": []}, "done": False}
+            yield {"message": {"role": "assistant", "content": "",
+                               "tool_calls": []}, "done": True}
+
+        return word_by_word()
 
     def list(self):
         return {"models": [{"name": "sim-model", "size": 1}]}
@@ -179,7 +178,6 @@ def staff(count):
 
 
 def install_fake_domain(people):
-    """Real ldap3, real bind, real search - only the network is invented."""
     names = {}
     for dn, entry in people.items():
         names[f"{entry['sAMAccountName']}@sim.internal"] = dn
@@ -201,8 +199,6 @@ def install_fake_domain(people):
 
 
 class Employee:
-    """One person at one browser. Its own cookie jar, like a real one."""
-
     def __init__(self, name, port):
         self.name = name
         self.http = httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=60)
@@ -235,7 +231,6 @@ class Employee:
 
 
 def at_once(work, count, gap=0.0):
-    """Genuinely concurrent: every thread waits on the same barrier."""
     ready = threading.Barrier(count)
     results = [None] * count
     errors = []
@@ -344,7 +339,6 @@ def run_scenarios(args, names, report, admin_password):
     if admin.sign_in(password=admin_password)[0].status_code != 200:
         admin = None
 
-    # ------------------------------------------------------------------
     heading("1. Day one: nobody has an account yet")
 
     before = users.listing()
@@ -374,7 +368,6 @@ def run_scenarios(args, names, report, admin_password):
     report.check(len(identities) == len(from_ad),
                  "no two people were given the same Qlik identity")
 
-    # ------------------------------------------------------------------
     heading("2. Everyone works at the same time")
 
     def work(index):
@@ -397,7 +390,6 @@ def run_scenarios(args, names, report, admin_password):
     for line in broken[:4]:
         print(f"            {RED}{line}{OFF}")
 
-    # ------------------------------------------------------------------
     heading("3. Did anybody see anybody else's work?")
 
     leaks = []
@@ -425,7 +417,6 @@ def run_scenarios(args, names, report, admin_password):
                  "each person got their own Qlik connection, opened as them",
                  f"{len(set(sockets))} distinct identities across {len(sockets)} sockets")
 
-    # ------------------------------------------------------------------
     heading("4. Qlik goes down in the middle of the day")
 
     Qlik.reachable = False
@@ -458,7 +449,6 @@ def run_scenarios(args, names, report, admin_password):
                  "a downed Qlik is not hammered with a connection attempt per request",
                  f"{len(Qlik.opened) - attempts_before} new attempts across 5 requests")
 
-    # ------------------------------------------------------------------
     heading("5. Qlik comes back")
 
     Qlik.reachable = True
@@ -494,7 +484,6 @@ def run_scenarios(args, names, report, admin_password):
                  "nobody was signed out by the outage",
                  f"{len(still_in)}/{len(sample)} still hold the session they logged in with")
 
-    # ------------------------------------------------------------------
     heading("6. Somebody types their password wrong five times")
 
     victim = Employee(names[0], port)
@@ -522,7 +511,6 @@ def run_scenarios(args, names, report, admin_password):
     victim.close()
     neighbour.close()
 
-    # ------------------------------------------------------------------
     heading("7. A new starter arrives while everyone is working")
 
     newcomer_name = "newstarter"
@@ -568,7 +556,6 @@ def run_scenarios(args, names, report, admin_password):
                  f"{record['qlik_directory']}\\{record['qlik_user_id']}" if record else "no account")
     newcomer.close()
 
-    # ------------------------------------------------------------------
     heading("8. More people at once than there are worker threads")
 
     crowd = min(config.WORKER_THREADS + 40, 200)
@@ -598,8 +585,94 @@ def run_scenarios(args, names, report, admin_password):
     for person in browsers:
         person.close()
 
-    # ------------------------------------------------------------------
-    heading("9. Nine o'clock tomorrow: everybody signs in again at once")
+    heading("9. Streaming answers while the server is busy")
+
+    talkers = staff_clients[:min(12, len(staff_clients))]
+    readers = staff_clients[12:] or staff_clients
+
+    def stream(index):
+        person = talkers[index]
+        with person.http.stream("POST", "/api/chat/stream",
+                                json={"message": f"streamed from {person.name}"}) as r:
+            return r.status_code, "".join(r.iter_text())
+
+    def load(index):
+        for _ in range(4):
+            readers[index % len(readers)].get("/api/state")
+
+    answers = [None] * len(talkers)
+    ready = threading.Barrier(len(talkers) + len(readers))
+
+    def both(index):
+        ready.wait()
+        if index < len(talkers):
+            try:
+                answers[index] = stream(index)
+            except Exception as e:
+                answers[index] = (0, f"{type(e).__name__}: {e}")
+        else:
+            load(index - len(talkers))
+
+    threads = [threading.Thread(target=both, args=(i,))
+               for i in range(len(talkers) + len(readers))]
+    began = time.perf_counter()
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=180)
+
+    finished = [a for a in answers if a and a[0] == 200
+                and ("\"type\": \"final\"" in a[1] or "\"type\":\"final\"" in a[1])]
+    wedged = [a for a in answers if a and "un-acquired lock" in a[1]]
+    report.check(not wedged,
+                 "no streamed answer left a lock behind",
+                 "a lock held across a yield is released by whichever pool "
+                 "thread happens to resume the generator")
+    report.check(len(finished) == len(talkers),
+                 f"all {len(talkers)} streamed answers completed while "
+                 f"{len(readers)} others hammered the page",
+                 f"{len(finished)}/{len(talkers)} in {time.perf_counter() - began:.1f}s")
+
+    leftover = [t.name for t in threading.enumerate() if t.name.startswith("chat-")]
+    report.check(not leftover,
+                 "no turn is still running once its answer is delivered",
+                 f"{len(leftover)} left behind" if leftover else "")
+
+    after = staff_clients[0].get("/api/state")
+    report.check(after.status_code == 200,
+                 "the server is still answering afterwards",
+                 f"GET /api/state -> {after.status_code}")
+
+    heading("10. One person, two devices, first ever sign-in, same instant")
+
+    clashes = Counter()
+    for round_number in range(8):
+        name = f"twindev{round_number:02d}"
+        joined = staff(args.users)
+        joined[f"CN={name},OU=Staff,{BASE_DN}"] = {
+            "sAMAccountName": name, "displayName": "Two Devices",
+            "mail": f"{name}@sim.internal",
+            "userPrincipalName": f"{name}@sim.internal",
+            "userPassword": PASSWORD, "objectClass": "person",
+        }
+        install_fake_domain(joined)
+        devices = [Employee(name, port) for _ in range(4)]
+        got, _, _ = at_once(lambda i: devices[i].sign_in(), len(devices))
+        clashes.update(str(o[0].status_code) for o in got if o)
+        for device in devices:
+            device.close()
+
+    report.check(all(code == "200" for code in clashes),
+                 "a phone, a laptop and two tabs all get in",
+                 ", ".join(f"{code}: {count}" for code, count in sorted(clashes.items())))
+
+    duplicated = [name for name, count in
+                  Counter(u["username"] for u in users.listing()).items() if count > 1]
+    report.check(not duplicated,
+                 "and only one account was created for each of them",
+                 f"duplicated: {duplicated[:3]}" if duplicated else "")
+
+    heading("11. Nine o'clock tomorrow: everybody signs in again at once")
 
     returning = [Employee(name, port) for name in names]
     outcomes, errors, elapsed = at_once(

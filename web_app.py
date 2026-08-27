@@ -3,7 +3,9 @@ import contextlib
 import ipaddress
 import json
 import logging
+import queue
 import sys
+import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -474,7 +476,20 @@ def post_chat_stream(body: ChatMessage, sess=Depends(qlik_session),
     except OllamaError as e:
         raise HTTPException(503, str(e)) from e
 
-    def events():
+    outbox = queue.Queue(maxsize=64)
+    cancelled = threading.Event()
+    FINISHED = object()
+
+    def emit(event):
+        while not cancelled.is_set():
+            try:
+                outbox.put(event, timeout=0.2)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def turn():
         try:
             with sess.lock:
                 before = engine_.get_script()
@@ -488,14 +503,17 @@ def post_chat_stream(body: ChatMessage, sess=Depends(qlik_session),
                         allowed=ASSISTANT_TOOLS,
                         confirm=_may_run(sess),
                     ):
-                        yield _sse(event)
+                        if not emit(event):
+                            break
                 finally:
                     sess.persist()
 
+                if cancelled.is_set():
+                    return
                 after = engine_.get_script()
                 sheets = engine_.list_sheets()
 
-            yield _sse({
+            emit({
                 "type": "final",
                 "script_changed": before != after,
                 "script": after,
@@ -508,7 +526,22 @@ def post_chat_stream(body: ChatMessage, sess=Depends(qlik_session),
             })
         except Exception as e:
             log.exception("Streamed chat turn failed")
-            yield _sse({"type": "error", "message": f"{type(e).__name__}: {e}"})
+            emit({"type": "error", "message": f"{type(e).__name__}: {e}"})
+        finally:
+            outbox.put(FINISHED)
+
+    def events():
+        worker = threading.Thread(target=turn, name=f"chat-{sess.key}",
+                                  daemon=True)
+        worker.start()
+        try:
+            while True:
+                event = outbox.get()
+                if event is FINISHED:
+                    return
+                yield _sse(event)
+        finally:
+            cancelled.set()
 
     return StreamingResponse(
         events(),

@@ -501,15 +501,21 @@ def from_directory(entry, qlik_identity, role=None):
 
     existing = by_username(name)
     if existing is None:
-        user = create(
-            name, password=None, role=role or USER,
-            display_name=entry.get("display_name") or "",
-            qlik_directory=qlik_directory, qlik_user_id=qlik_user_id,
-            auth_source=DIRECTORY,
-        )
-        audit("user.created", user=user,
-              detail={"username": name, "from": "directory"})
-    else:
+        try:
+            user = create(
+                name, password=None, role=role or USER,
+                display_name=entry.get("display_name") or "",
+                qlik_directory=qlik_directory, qlik_user_id=qlik_user_id,
+                auth_source=DIRECTORY,
+            )
+            audit("user.created", user=user,
+                  detail={"username": name, "from": "directory"})
+        except UserError:
+            existing = by_username(name)
+            if existing is None:
+                raise
+            log.info("%s was created by another request; using that account", name)
+    if existing is not None:
         fields = {
             "display_name": entry.get("display_name") or existing["display_name"],
             "qlik_directory": qlik_directory,

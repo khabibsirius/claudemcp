@@ -6,6 +6,7 @@ import pytest
 import websocket
 from fastapi.testclient import TestClient
 
+import llm
 import session
 import users
 import web_app
@@ -90,6 +91,63 @@ class FakeEngine:
 
     def die(self):
         self.connected = False
+
+    def get_script(self):
+        return "///$tab Main\r\nTRACE hello;\r\n"
+
+    def set_script(self, script, validate=True):
+        return script
+
+    def list_sheets(self):
+        return []
+
+    def list_connections(self):
+        return []
+
+    def get_fields(self):
+        return []
+
+    def get_tables(self):
+        return []
+
+    def app_file_info(self):
+        return {"path": "x.qvf", "size_bytes": 1, "modified": "now"}
+
+    def save(self):
+        return True
+
+
+class FakeModel:
+    def chat(self, model=None, messages=None, tools=None, options=None,
+             stream=False):
+        if not stream:
+            return {"message": {"role": "assistant", "content": "done",
+                                "tool_calls": []}, "done": True}
+
+        def pieces():
+            for n in range(5):
+                yield {"message": {"role": "assistant", "content": f"part{n} ",
+                                   "tool_calls": []}, "done": False}
+            yield {"message": {"role": "assistant", "content": "",
+                               "tool_calls": []}, "done": True}
+
+        return pieces()
+
+    def list(self):
+        return {"models": [{"name": "test-model", "size": 1}]}
+
+    def show(self, model):
+        return {"capabilities": ["tools"]}
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def talking(monkeypatch):
+    monkeypatch.setattr(llm, "build_client", lambda: FakeModel())
+    session.system().state["client"] = None
+    session.system().state["model"] = "test-model"
 
 
 @pytest.fixture
@@ -355,6 +413,126 @@ def client(engines):
     return TestClient(web_app.app)
 
 
+class TestSigningInFromTwoDevicesAtOnce:
+
+    def directory_entry(self, name):
+        return {"username": name, "display_name": f"Employee {name}",
+                "mail": f"{name}@bank.internal", "groups": [], "dn": f"CN={name}"}
+
+    def race(self, name, devices=4):
+        made, errors = [], []
+        start = threading.Barrier(devices)
+
+        def first_sign_in():
+            start.wait()
+            try:
+                made.append(users.from_directory(
+                    self.directory_entry(name), ("BANK", name), role=users.USER))
+            except Exception as e:
+                errors.append(f"{type(e).__name__}: {e}")
+
+        threads = [threading.Thread(target=first_sign_in) for _ in range(devices)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+        return made, errors
+
+    def test_the_loser_of_the_race_gets_the_winner_s_account(self):
+        made, errors = self.race("newstarter")
+        assert errors == [], f"a simultaneous first sign-in failed: {errors[0]}"
+        assert len({row["id"] for row in made}) == 1, "they got different accounts"
+
+    def test_only_one_account_is_created(self):
+        self.race("solo")
+        matching = [u for u in users.listing() if u["username"] == "solo"]
+        assert len(matching) == 1
+
+    def test_a_name_the_directory_should_not_have_sent_is_still_refused(self):
+        with pytest.raises(users.UserError):
+            users.from_directory(self.directory_entry("!!"), ("BANK", "!!"))
+
+
+class TestAStreamedTurnGivesTheLockBack:
+
+    def test_the_lock_is_free_once_the_turn_is_over(self, client, engines, talking):
+        sess = session.system()
+        sess.open_app("Deposits")
+
+        response = client.post("/api/chat/stream", json={"message": "hello"})
+
+        assert response.status_code == 200
+        assert "un-acquired lock" not in response.text
+        held = sess.lock.acquire(timeout=5)
+        assert held, "the streamed turn did not give the lock back"
+        sess.lock.release()
+
+    def test_the_lock_is_free_even_when_the_turn_fails(self, client, engines,
+                                                       monkeypatch):
+        sess = session.system()
+        sess.open_app("Deposits")
+
+        def explode(*args, **kwargs):
+            raise RuntimeError("the model fell over")
+
+        monkeypatch.setattr(web_app, "stream_agent", explode)
+        client.post("/api/chat/stream", json={"message": "hello"})
+
+        held = sess.lock.acquire(timeout=5)
+        assert held, "a failed turn kept the lock"
+        sess.lock.release()
+
+    def test_the_lock_is_never_held_by_the_thread_that_yields(
+            self, client, engines, talking, monkeypatch):
+        real = threading.RLock()
+        holders = []
+
+        class Watched:
+            def acquire(self, *args, **kwargs):
+                holders.append(threading.current_thread().name)
+                return real.acquire(*args, **kwargs)
+
+            def release(self):
+                return real.release()
+
+            def __enter__(self):
+                self.acquire()
+                return self
+
+            def __exit__(self, *exc):
+                self.release()
+                return False
+
+        monkeypatch.setattr(session, "_engine_lock", Watched())
+        sess = session.system()
+        sess.open_app("Deposits")
+
+        client.post("/api/chat/stream", json={"message": "hello"})
+
+        assert holders, "the streamed turn never took the lock"
+        assert any(name.startswith("chat-") for name in holders), (
+            f"the lock was only ever taken on {sorted(set(holders))}. The turn "
+            f"has to hold it on a thread of its own: the thread driving the "
+            f"response changes underneath it once the pool is busy, and an "
+            f"RLock released by a thread that does not hold it raises and "
+            f"stays held for good")
+
+    def test_nobody_is_left_running_once_it_is_over(self, client, engines, talking):
+        sess = session.system()
+        sess.open_app("Deposits")
+        client.post("/api/chat/stream", json={"message": "hello"})
+
+        for _ in range(50):
+            if not [t for t in threading.enumerate()
+                    if t.name.startswith("chat-")]:
+                break
+            time.sleep(0.1)
+
+        leftover = [t.name for t in threading.enumerate()
+                    if t.name.startswith("chat-")]
+        assert leftover == [], f"still running: {leftover}"
+
+
 class TestTheReconnectButton:
 
     def test_it_rebuilds_the_connection(self, client, monkeypatch):
@@ -417,7 +595,7 @@ class TestTheHealthView:
 
 
 class TestTheAdministratorsButton:
-    def test_it_reconnects_every_session(self, client, engines):
+    def test_it_reconnects_every_session(self, client, engines, talking):
         people = []
         for number in (11, 12, 13):
             sess = session.for_user({"id": number, "username": f"u{number}",
@@ -453,7 +631,7 @@ class TestTheAdministratorsButton:
         assert [f["session"] for f in body["failed"]] == [bad.key]
         assert good.key in body["reconnected"]
 
-    def test_it_shows_every_session_s_connection(self, client, engines):
+    def test_it_shows_every_session_s_connection(self, client, engines, talking):
         sess = session.for_user({"id": 31, "username": "kate",
                                  "qlik_directory": "", "qlik_user_id": ""})
         sess.open_app("Deposits")
