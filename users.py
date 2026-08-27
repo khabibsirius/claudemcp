@@ -219,7 +219,8 @@ def unusable_password():
 
 def check_password_quality(password):
     if len(password or "") < PASSWORD_MIN:
-        raise UserError(f"A password needs at least {PASSWORD_MIN} characters.")
+        unit = "character" if PASSWORD_MIN == 1 else "characters"
+        raise UserError(f"A password needs at least {PASSWORD_MIN} {unit}.")
     return password
 
 

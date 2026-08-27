@@ -165,6 +165,7 @@ HISTORY_DIR=C:\ProgramData\QlikAI\history
 # --- Access -------------------------------------------------------------
 AUTH_ENABLED=true
 COOKIE_SECURE=true                       # once TLS is in front, see step 5
+PASSWORD_MIN=8                           # local accounts only, see below
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=<choose one, or leave blank and read it from the log once>
 
@@ -176,6 +177,14 @@ MAX_USER_SESSIONS=200
 # --- Logging ------------------------------------------------------------
 LOG_FILE=C:\ProgramData\QlikAI\logs\qlik-ai.log
 ```
+
+`PASSWORD_MIN` applies **only to accounts created inside this app**. An
+Active Directory password is never length-checked here — it goes straight to
+the domain controller, which enforces the domain's own policy. So if sign-in
+is refusing a password as too short, the account is a local one, and lowering
+this setting is the fix. Turning `AUTH_ENABLED` off is not: it puts every
+user into one shared conversation and one shared Qlik identity, and the
+server then refuses to serve anything but `127.0.0.1`.
 
 `.env` holds the API key and possibly the admin password. Lock it down the
 same way as the certificates, and keep it out of the checkout — it is
