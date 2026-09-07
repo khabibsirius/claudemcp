@@ -1,12 +1,46 @@
 import re
 
-from chart_defaults import CHART_DEFAULTS
+from chart_defaults import CHART_DEFAULTS as _GENERATED
+
+try:
+    from chart_overrides import AVAILABLE_TYPES, CHART_OVERRIDES
+except ImportError:
+    AVAILABLE_TYPES = ()
+    CHART_OVERRIDES = {}
+
+CHART_DEFAULTS = {**_GENERATED, **CHART_OVERRIDES}
 
 VERIFIED_TYPES = ("kpi", "barchart", "linechart", "piechart")
 
 CHART_TYPES = VERIFIED_TYPES + tuple(
     sorted(t for t in CHART_DEFAULTS if t not in VERIFIED_TYPES)
 )
+
+EQUIVALENTS = {
+    "sn-table": ("sn-table", "table"),
+    "table": ("table", "sn-table"),
+    "sn-pivot-table": ("sn-pivot-table", "pivot-table", "pivottable"),
+    "pivot-table": ("pivot-table", "sn-pivot-table"),
+    "pivottable": ("pivottable", "pivot-table", "sn-pivot-table"),
+    "sn-grid-chart": ("sn-grid-chart", "sn-pivot-table", "pivot-table"),
+}
+
+
+def available(chart_type):
+    if not AVAILABLE_TYPES or chart_type in AVAILABLE_TYPES:
+        return True
+
+    return not any(twin in AVAILABLE_TYPES
+                   for twin in EQUIVALENTS.get(chart_type, ()))
+
+
+def prefer_available(chart_type):
+    if not AVAILABLE_TYPES or available(chart_type):
+        return chart_type
+    for candidate in EQUIVALENTS.get(chart_type, ()):
+        if available(candidate) and candidate in CHART_DEFAULTS:
+            return candidate
+    return chart_type
 
 CHART_ALIASES = {
     "scatter": "scatterplot",
@@ -45,9 +79,9 @@ CHART_ALIASES = {
 def resolve_chart_type(name):
     text = (name or "").strip().lower()
     if text in CHART_TYPES:
-        return text
+        return prefer_available(text)
     if text in CHART_ALIASES:
-        return CHART_ALIASES[text]
+        return prefer_available(CHART_ALIASES[text])
     squashed = re.sub(r"[\s_-]+", "", text)
     if squashed in CHART_TYPES:
         return squashed
@@ -105,6 +139,9 @@ def fallback_types(chart_type, dimensions, measures):
 
     usable = []
     for candidate in FALLBACK_TYPES.get(chart_type, ("sn-table",)):
+        candidate = prefer_available(candidate)
+        if candidate == chart_type or candidate in usable:
+            continue
         (min_d, max_d), (min_m, max_m) = chart_requirements(candidate)
         if min_d <= n_dims <= (max_d or n_dims) and min_m <= n_meas <= (max_m or n_meas):
             usable.append(candidate)
@@ -357,12 +394,27 @@ def _build_from_defaults(chart_type, object_id, title, hypercube_def,
         _apply_generated_colour(chart_type, properties, resolved)
 
     columns = len(merged.get("qDimensions", [])) + len(merged.get("qMeasures", []))
-    if columns and "qColumnOrder" in merged and not merged["qColumnOrder"]:
-        merged["qColumnOrder"] = list(range(columns))
-        properties.setdefault("columnOrder", list(range(columns)))
-        properties.setdefault("columnWidths", [-1] * columns)
+    if columns:
+        _fit_columns(merged, columns)
+        _fit_columns(properties, columns)
+
+        if "qColumnOrder" in merged:
+            properties.setdefault("columnOrder", list(range(columns)))
+            properties.setdefault("columnWidths", [-1] * columns)
 
     return properties
+
+
+ORDER_KEYS = ("qColumnOrder", "columnOrder", "qInterColumnSortOrder")
+
+
+def _fit_columns(holder, columns):
+    for key in ORDER_KEYS:
+        if key in holder and len(holder[key] or []) != columns:
+            holder[key] = list(range(columns))
+
+    if "columnWidths" in holder and len(holder["columnWidths"] or []) != columns:
+        holder["columnWidths"] = [-1] * columns
 
 
 def build_properties(chart_type, object_id, title, hypercube_def, subtitle="",

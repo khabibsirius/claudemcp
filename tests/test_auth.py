@@ -193,9 +193,18 @@ class TestChangingYourOwnPassword:
         assert sign_in(client, "jsmith", "jsmith-password-1").status_code == 401
         assert sign_in(client, "jsmith", "a-new-password").status_code == 200
 
-    def test_a_short_one_is_refused(self, client):
+    def test_one_under_the_minimum_is_refused(self, client, monkeypatch):
+        monkeypatch.setattr(users, "PASSWORD_MIN", 8)
         sign_in(client, "jsmith", "jsmith-password-1")
-        assert client.post("/api/me/password", json={"password": "no"}).status_code == 400
+        assert client.post("/api/me/password",
+                           json={"password": "no"}).status_code == 400
+
+    def test_an_empty_one_is_refused_however_low_the_minimum(self, client,
+                                                             monkeypatch):
+        monkeypatch.setattr(users, "PASSWORD_MIN", 1)
+        sign_in(client, "jsmith", "jsmith-password-1")
+        assert client.post("/api/me/password",
+                           json={"password": ""}).status_code == 400
 
 
 class TestApiTokens:

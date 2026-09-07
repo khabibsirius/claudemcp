@@ -33,6 +33,7 @@ from config import (
     LOG_FILE,
     LOG_LEVEL,
     LOG_MAX_MB,
+    PASSWORD_MIN,
     WORKER_THREADS,
 )
 from data_prep import tab_names
@@ -93,6 +94,8 @@ def _engine(sess):
         if sess.app_name() is None:
             sess.open_app(APP_NAME)
         return sess.engine()
+    except session.QlikIdentityMissing as e:
+        raise HTTPException(403, str(e)) from e
     except session.QlikConnectionLost as e:
         raise HTTPException(503, str(e), headers={"X-Qlik-Reconnect": "1"}) from e
     except QlikEngineError as e:
@@ -960,6 +963,13 @@ def main(argv=None):
         try:
             generated = users.bootstrap()
             _adopt_earlier_conversations()
+        except users.UserError as e:
+            print(f"Could not create the administrator "
+                  f"{users.ADMIN_USERNAME!r}: {e}\n"
+                  f"ADMIN_PASSWORD in .env has to satisfy PASSWORD_MIN "
+                  f"(currently {PASSWORD_MIN}). Lower PASSWORD_MIN, or "
+                  f"set a longer ADMIN_PASSWORD.", file=sys.stderr)
+            return 1
         except Exception as e:
             print(f"Could not open the account database: {e}", file=sys.stderr)
             return 1

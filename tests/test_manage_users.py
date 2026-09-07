@@ -112,7 +112,9 @@ class TestCreating:
         assert run("create", "not a username", "--password", "a-good-password") == 1
         assert "username" in capsys.readouterr().err.lower()
 
-    def test_a_short_password_is_refused(self, boss, capsys):
+    def test_a_password_under_the_minimum_is_refused(self, boss, capsys,
+                                                     monkeypatch):
+        monkeypatch.setattr(users, "PASSWORD_MIN", 8)
         assert run("create", "jsmith", "--password", "no") == 1
         assert "at least" in capsys.readouterr().err
 

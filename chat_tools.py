@@ -3,8 +3,10 @@ import logging
 from collections import Counter
 
 from chart_specs import (
+    AVAILABLE_TYPES,
     CHART_TYPES,
     DIMENSIONAL_TYPES,
+    available,
     chart_requirements,
     describe_chart_types,
     fallback_types,
@@ -191,6 +193,13 @@ def _chart_problem(engine, chart_type, title, dimensions, measures):
 
     if not (title or "").strip():
         return "every chart needs a title - it is what the user reads first."
+
+    if not available(resolved):
+        return (
+            f"{resolved} is not installed on this Qlik server - it would show "
+            f"'Invalid visualization' on the sheet instead of data. This server "
+            f"has: {', '.join(sorted(AVAILABLE_TYPES))}."
+        )
 
     dimensions = [d for d in (dimensions or []) if str(d).strip()]
     measures = [m for m in (measures or []) if str(m).strip()]

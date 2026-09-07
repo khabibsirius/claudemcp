@@ -201,10 +201,31 @@ class TestEnterpriseGivesEveryoneTheirOwnConnection:
         alice, bob = two_people
         assert session.for_user(alice).lock is not session.for_user(bob).lock
 
-    def test_a_user_with_no_qlik_identity_falls_back(self, engines):
+    def test_a_user_with_no_qlik_identity_is_refused(self, engines,
+                                                     monkeypatch):
+        monkeypatch.setattr(session, "AUTH_ENABLED", True)
+        monkeypatch.setattr(session, "ALLOW_SHARED_QLIK_IDENTITY", False)
+
         nobody = users.create("carol", "carol-password-1")
         sess = session.for_user(nobody)
+
         assert sess.impersonates is False
+        with pytest.raises(session.QlikIdentityMissing):
+            sess.open_app("sales")
+
+        assert engines == [], (
+            "borrowing the service account is how a plain user came to see "
+            "every app the service account can see"
+        )
+
+    def test_the_old_fallback_can_be_restored_deliberately(self, engines,
+                                                           monkeypatch):
+        monkeypatch.setattr(session, "AUTH_ENABLED", True)
+        monkeypatch.setattr(session, "ALLOW_SHARED_QLIK_IDENTITY", True)
+
+        nobody = users.create("dmitri", "dmitri-password-1")
+        sess = session.for_user(nobody)
+
         sess.open_app("sales")
         assert engines[0].identity == (None, None)
 

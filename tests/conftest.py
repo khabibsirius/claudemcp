@@ -1,5 +1,6 @@
 import json
 import sys
+import types
 from collections import deque
 from pathlib import Path
 
@@ -7,6 +8,20 @@ import pytest
 import websocket
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+def _neutral_overrides():
+    stub = types.ModuleType("chart_overrides")
+    stub.CHART_OVERRIDES = {}
+    stub.AVAILABLE_TYPES = ()
+    stub.__test_stub__ = True
+    return stub
+
+
+NEUTRAL_OVERRIDES = _neutral_overrides()
+
+sys.modules.setdefault("chart_overrides", NEUTRAL_OVERRIDES)
+sys.modules.pop("chart_specs", None)
 
 import auth
 import glossary

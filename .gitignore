@@ -30,3 +30,6 @@ tools/package-lock.json
 *.db
 *.db-wal
 *.db-shm
+
+# Harvested from the Qlik server this copy talks to - never shared
+chart_overrides.py

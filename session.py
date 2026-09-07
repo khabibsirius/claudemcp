@@ -6,10 +6,14 @@ import history
 from chat_tools import system_prompt
 import llm
 from config import (
+    ALLOW_SHARED_QLIK_IDENTITY,
     APP_NAME,
+    AUTH_ENABLED,
     ENTERPRISE,
     MAX_USER_SESSIONS,
     QLIK_MODE,
+    QLIK_USER_DIRECTORY,
+    QLIK_USER_ID,
     RECONNECT_COOLDOWN_SECONDS,
     USER_SESSION_IDLE_MINUTES,
 )
@@ -19,6 +23,10 @@ from qlik_engine import QlikEngine, QlikEngineError, QlikNotConnectedError
 log = logging.getLogger(__name__)
 
 SYSTEM_KEY = "system"
+
+
+class QlikIdentityMissing(QlikEngineError):
+    pass
 
 
 class QlikConnectionLost(QlikNotConnectedError):
@@ -81,10 +89,28 @@ class Session:
     def lock(self):
         return _engine_lock if self.shares_engine else self._own_lock
 
+    @property
+    def borrows_service_account(self):
+        return (per_user_engines() and AUTH_ENABLED
+                and self.user_id is not None
+                and not self.impersonates
+                and not ALLOW_SHARED_QLIK_IDENTITY)
+
     def _new_engine(self):
         if self.impersonates:
             return QlikEngine(user_directory=self.qlik_directory,
                               user_id=self.qlik_user_id)
+
+        if self.borrows_service_account:
+            raise QlikIdentityMissing(
+                f"{self.username!r} has no Qlik identity, so this connection "
+                f"would run as the service account "
+                f"{QLIK_USER_DIRECTORY}\\{QLIK_USER_ID} and could open and "
+                f"change every app that account can reach. Set the Qlik "
+                f"directory and user id on this account in the admin page, "
+                f"then sign in again."
+            )
+
         return QlikEngine()
 
     def connected(self):

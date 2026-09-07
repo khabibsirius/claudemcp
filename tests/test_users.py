@@ -41,9 +41,21 @@ class TestPasswords:
         monkeypatch.setattr(users, "PBKDF2_ROUNDS", 99_000)
         assert users.check_password("secret", stored) is True
 
-    def test_a_short_password_is_refused(self, store):
+    def test_a_password_under_the_minimum_is_refused(self, store, monkeypatch):
+        monkeypatch.setattr(users, "PASSWORD_MIN", 8)
         with pytest.raises(users.UserError, match="at least"):
             users.create("jsmith", "short")
+
+    def test_an_empty_password_is_refused_however_low_the_minimum(self, store,
+                                                                  monkeypatch):
+        monkeypatch.setattr(users, "PASSWORD_MIN", 1)
+        with pytest.raises(users.UserError, match="at least"):
+            users.create("jsmith", "")
+
+    def test_a_one_character_password_is_allowed_when_configured(self, store,
+                                                                 monkeypatch):
+        monkeypatch.setattr(users, "PASSWORD_MIN", 1)
+        assert users.create("jsmith", "a")["username"] == "jsmith"
 
 
 class TestCreating:
