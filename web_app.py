@@ -284,6 +284,63 @@ def post_reconnect_all(identity: Identity = Depends(require_admin)):
     return {"reconnected": healed, "failed": failed}
 
 
+@app.get("/api/admin/qlik-users")
+def get_qlik_users(identity: Identity = Depends(require_admin)):
+    import qrs
+
+    if not qrs.enabled():
+        raise HTTPException(400, "QRS_ENABLED is false, so there is no "
+                                 "repository to read accounts from.")
+    try:
+        rows = qrs.fetch_users()
+    except Exception as e:
+        raise HTTPException(502, str(e)) from e
+
+    people = []
+    for row in rows:
+        directory_name, user_id = qrs.identity(row)
+        people.append({
+            "directory": directory_name,
+            "user_id": user_id,
+            "name": (row.get("name") or "").strip(),
+            "admin": qrs.is_admin(row),
+            "skipped": qrs.skipped(row),
+        })
+    return {"where": qrs.where(), "users": people}
+
+
+@app.post("/api/admin/sync-users")
+def post_sync_users(identity: Identity = Depends(require_admin)):
+    import qrs
+
+    if not qrs.enabled():
+        raise HTTPException(400, "QRS_ENABLED is false, so there is no "
+                                 "repository to read accounts from.")
+    try:
+        outcome = qrs.sync()
+    except Exception as e:
+        raise HTTPException(502, str(e)) from e
+
+    users.audit("users.synced", user=identity.user, ip=identity.ip,
+                detail=identity.audited(
+                    created=len(outcome["created"]),
+                    updated=len(outcome["updated"]),
+                    skipped=len(outcome["skipped"]),
+                    failed=len(outcome["failed"])))
+
+    return {
+        "where": qrs.where(),
+        "created": [{"username": n, "qlik": w, "role": r}
+                    for n, w, r in outcome["created"]],
+        "updated": [{"username": n, "qlik": w, "fields": f}
+                    for n, w, f in outcome["updated"]],
+        "unchanged": len(outcome["unchanged"]),
+        "skipped": [{"qlik": w, "why": y} for w, y in outcome["skipped"]],
+        "failed": [{"username": n, "error": e} for n, e in outcome["failed"]],
+        "passwords": outcome["passwords"],
+    }
+
+
 @app.get("/api/admin/health")
 def get_admin_health(identity: Identity = Depends(require_admin)):
     return {

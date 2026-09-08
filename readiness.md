@@ -68,7 +68,7 @@ is actually reachable; `/healthz` stays a flat 200 on purpose, because a
 probe that failed during a Qlik outage would have the service restarted for
 somebody else's problem.
 
-Covered by `tests/test_resilience.py` (31 tests) and verified end-to-end
+Verified end-to-end
 against a real server over a real socket.
 
 **Not closed:** a full disk or a locked database file still fails the request

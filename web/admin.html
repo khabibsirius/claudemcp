@@ -220,6 +220,7 @@
     <div class="bar">
       <h2>Users</h2>
       <span class="spacer"></span>
+      <button id="btnSyncUsers">Sync from Qlik</button>
       <button class="primary" id="btnNewUser">+ New user</button>
     </div>
     <p class="hint" id="signInHint"></p>
@@ -803,6 +804,45 @@ async function loadSessions() {
 }
 
 $("btnRefreshSessions").onclick = () => loadSessions().catch(e => say(e.message));
+
+$("btnSyncUsers").onclick = async () => {
+  const button = $("btnSyncUsers");
+  button.disabled = true;
+  say("Reading accounts from Qlik…", "good");
+  try {
+    const result = await api("/api/admin/sync-users", {method: "POST"});
+
+    const parts = [];
+    if (result.created.length) parts.push(`${result.created.length} created`);
+    if (result.updated.length) parts.push(`${result.updated.length} updated`);
+    if (result.unchanged) parts.push(`${result.unchanged} already correct`);
+    if (result.skipped.length) parts.push(`${result.skipped.length} skipped`);
+
+    const broken = result.failed.length;
+    if (broken) {
+      parts.push(`${broken} failed: ` +
+        result.failed.map(f => `${f.username} (${f.error})`).join("; "));
+    }
+    say(parts.join(", ") || "Nothing to do.", broken ? "bad" : "good");
+
+    const issued = Object.entries(result.passwords || {});
+    if (issued.length) {
+      const lines = issued.map(([name, password]) => `${name}: ${password}`);
+      alert(
+        "These accounts were created with a password. This is the only time " +
+        "it is shown — copy it now.\n\n" + lines.join("\n") +
+        "\n\nWith LDAP on they would sign in with their Windows password " +
+        "instead and none of these would be needed."
+      );
+    }
+
+    await loadUsers();
+  } catch (e) {
+    say(e.message);
+  } finally {
+    button.disabled = false;
+  }
+};
 
 $("btnReconnectAll").onclick = async () => {
   const button = $("btnReconnectAll");

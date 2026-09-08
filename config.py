@@ -68,6 +68,20 @@ QLIK_USER_DIRECTORY = _str_env("QLIK_USER_DIRECTORY")
 QLIK_USER_ID = _str_env("QLIK_USER_ID")
 QLIK_SSL_VERIFY = _bool_env("QLIK_SSL_VERIFY", True)
 
+QRS_ENABLED = _bool_env("QRS_ENABLED", False)
+QRS_HOST = _str_env("QRS_HOST") or QLIK_HOST
+QRS_PORT = _int_env("QRS_PORT", 4242)
+QRS_TIMEOUT = _float_env("QRS_TIMEOUT", 30.0)
+QRS_AS_USER = _str_env("QRS_AS_USER", r"INTERNAL\sa_repository")
+QRS_SKIP_DIRECTORIES = tuple(
+    part.strip().lower()
+    for part in _str_env("QRS_SKIP_DIRECTORIES", "INTERNAL").split(",")
+    if part.strip()
+)
+QRS_ADMIN_ROLE = _str_env("QRS_ADMIN_ROLE", "RootAdmin")
+QRS_ADMIN_PROPERTY = _str_env("QRS_ADMIN_PROPERTY")
+QRS_ADMIN_VALUE = _str_env("QRS_ADMIN_VALUE")
+
 CLIENT_CERT = "client.pem"
 CLIENT_KEY = "client_key.pem"
 ROOT_CERT = "root.pem"

@@ -163,6 +163,63 @@ def cmd_qlik(args):
     return 0
 
 
+def cmd_sync(args):
+    import qrs
+
+    if not qrs.enabled() and not args.force:
+        return _fail("QRS_ENABLED is false. Set it in .env, or pass --force "
+                     "to sync anyway.")
+
+    print(f"Reading {qrs.where()} as {qrs.QRS_AS_USER}")
+    try:
+        rows = qrs.fetch_users()
+    except qrs.QrsError as e:
+        return _fail(str(e))
+
+    print(f"{len(rows)} account(s) in the Qlik repository")
+
+    if args.dry_run:
+        for row in rows:
+            why = qrs.skipped(row)
+            directory_name, user_id = qrs.identity(row)
+            who = f"{directory_name}\\{user_id or '(no user id)'}"
+            verdict = (f"skip - {why}" if why else
+                       ("administrator" if qrs.is_admin(row) else "user"))
+            print(f"   {who:<32} {verdict}")
+        print("\n--dry-run, so nothing was written.")
+        return 0
+
+    outcome = qrs.sync(rows)
+
+    for name, who, role in outcome["created"]:
+        print(f"   created   {name:<16} {who:<28} {role}")
+    for name, who, fields in outcome["updated"]:
+        print(f"   updated   {name:<16} {who:<28} {', '.join(fields)}")
+    for name, reason in outcome["failed"]:
+        print(f"   FAILED    {name:<16} {reason}", file=sys.stderr)
+
+    print(f"\n{len(outcome['created'])} created, "
+          f"{len(outcome['updated'])} updated, "
+          f"{len(outcome['unchanged'])} unchanged, "
+          f"{len(outcome['skipped'])} skipped, "
+          f"{len(outcome['failed'])} failed")
+
+    if args.verbose:
+        for who, why in outcome["skipped"]:
+            print(f"   skipped   {who:<32} {why}")
+
+    if outcome["passwords"]:
+        print("\n  ---------------------------------------------------")
+        print("  New accounts were given a password. This is shown once.")
+        for name, password in sorted(outcome["passwords"].items()):
+            print(f"  {name:<20} {password}")
+        print("  Turn LDAP on and they sign in with their Windows password")
+        print("  instead, and none of these are needed.")
+        print("  ---------------------------------------------------")
+
+    return 1 if outcome["failed"] else 0
+
+
 def cmd_token(args):
     user = _find(args.username)
     if user is None:
@@ -328,6 +385,16 @@ def build_parser():
     qlik.add_argument("directory", help="Qlik user directory, e.g. YOURDOMAIN")
     qlik.add_argument("user_id", help="Qlik user id")
     qlik.set_defaults(run=cmd_qlik)
+
+    pull = sub.add_parser(
+        "sync", help="create and refresh accounts from the Qlik repository")
+    pull.add_argument("--dry-run", action="store_true",
+                      help="show what would change and write nothing")
+    pull.add_argument("--verbose", action="store_true",
+                      help="also list who was skipped and why")
+    pull.add_argument("--force", action="store_true",
+                      help="run even when QRS_ENABLED is false")
+    pull.set_defaults(run=cmd_sync)
 
     token = sub.add_parser("token", help="issue or revoke an MCP token")
     token.add_argument("username")

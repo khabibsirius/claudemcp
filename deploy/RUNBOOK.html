@@ -698,16 +698,14 @@ py -3.12 -m venv .venv
         <label class="step"><div class="step-top">
           <input type="checkbox" data-k="p2b">
           <div class="step-body">
-            <p class="step-title">Run the test suite</p>
+            <p class="step-title">Check Qlik and the model endpoint</p>
             <div class="cmd">
               <div class="cmd-label"><span>PowerShell</span><button class="copy" type="button">Copy</button></div>
-<pre>.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m pytest</pre>
+<pre>.\.venv\Scripts\python.exe check_connection.py</pre>
             </div>
-            <div class="expect"><b>Expect:</b> 1459 passed
-No Qlik, no model and no directory are needed — the suite runs against fakes.</div>
-            <p>Anything failing here is the Python environment, not your
-            configuration. Fix it before going on.</p>
+            <div class="expect"><b>Expect:</b> an <code>ok</code> line for the Qlik connection, the app, and the model endpoint.</div>
+            <p>A failure here is the Python environment, the certificates or
+            the endpoint. Fix it before going on.</p>
           </div>
         </div></label>
 

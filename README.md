@@ -56,11 +56,11 @@ Secondary entry points, all optional:
 
 | | |
 | --- | --- |
-| `python chat.py` | The same assistant in a terminal. It can also reload (asks first). |
 | `python mcp_server.py` | MCP over stdio, if you'd rather not run the web server |
-| `python main.py` | One-shot: design a dashboard with the local model and build it |
 | `python check_connection.py` | Tests Qlik and the model separately when something breaks |
 | `python manage_users.py` | Accounts from the command line - unlock, reset a password, add an administrator |
+| `python harvest_charts.py` | Learn the chart property trees this Qlik server understands |
+| `python dump_object_properties.py` | Every object's full properties, for when a chart will not draw |
 
 ## How it works
 
@@ -130,7 +130,7 @@ first whenever something stops working.
 You'll need:
 
 - An app already loaded with data, named to match `APP_NAME`
-  (`python list_sheets.py --apps` shows what's available).
+  (the app dropdown in the web page shows what's available).
 - **A model endpoint** that speaks the OpenAI API, set in `.env` as
   `OPENAI_BASE_URL` / `OPENAI_MODEL` — only for the AI-design features, not the
   low-level MCP tools.
@@ -339,9 +339,8 @@ Browser → this server → Qlik and your model endpoint.
 
 ## Usage — chatbot
 
-```bash
-python chat.py
-python chat.py --app data --model gemma4:26b
+Open the web app and type in the chat panel.
+
 ```
 
 ```
@@ -357,7 +356,7 @@ that would replace your data.
 
 **The model must support tool calling**, and several good ones do not —
 `phi4` and `deepseek-coder` return a 400 for tools. If the configured model
-can't, `chat.py` and `web_app.py` pick an installed one that can and say so,
+can't, `web_app.py` picks an installed one that can and says so,
 rather than refusing to start. Set your own with `CHAT_MODEL` in `.env`,
 separate from `OPENAI_MODEL` so the dashboard designer (which only needs
 JSON, not tools) can keep using a different one.
@@ -378,12 +377,9 @@ Two things keep a local model from doing damage:
 
 ```bash
 python check_connection.py                 # smoke test, no LLM calls
-python main.py                             # build an AI-designed dashboard
-python main.py --app Sales --instruction "3 charts, focus on region"
-python list_sheets.py                      # sheets as the Hub sees them
-python list_sheets.py --apps               # apps and their ids
 python dump_object_properties.py           # every object's full properties
 python dump_object_properties.py --type piechart
+python harvest_charts.py --dry-run         # what chart types this server has
 ```
 
 ## Usage — MCP server
@@ -491,7 +487,7 @@ rather than an oversight:
 
 A load-script rewrite that no record attributes to anybody is exactly what
 this must not have. Those tools live in the web assistant and `python
-chat.py`, where a person is present, destructive actions ask first, and the
+the web app`, where a person is present, destructive actions ask first, and the
 change is recorded against them.
 
 `qlik_build_sheet` takes it either way. Pass `instruction="sales by region
@@ -512,7 +508,7 @@ Resources: `qlik://fields` and `qlik://sheets`.
 ### The load editor is meant to be edited by the AI
 
 This is **the assistant's** territory, not the MCP endpoint's — the chat
-panel in the web page, and `python chat.py`. The assistant reads the script,
+panel in the web page. The assistant reads the script,
 rewrites it, runs it, reads the errors and fixes them. Three things make that
 safe to do repeatedly:
 
@@ -607,15 +603,6 @@ fields are profiled for real sample values, and any dimension above
   source; charts referencing fields that no longer exist go blank. It asks
   first, is not reachable over MCP at all, and is recorded in the audit
   trail against whoever ran it.
-
-## Tests
-
-```bash
-pip install -r requirements-dev.txt
-pytest
-```
-
-The suite runs against a fake websocket — no Qlik and no model endpoint needed.
 
 ## Notes / limitations
 
