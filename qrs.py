@@ -42,14 +42,24 @@ def _xrfkey():
     return "".join(secrets.choice(alphabet) for _ in range(16))
 
 
+AS_USER_OVERRIDE = None
+
+CANDIDATES = ("INTERNAL\\sa_api", "INTERNAL\\sa_repository")
+
+
+def as_user_setting():
+    return AS_USER_OVERRIDE or QRS_AS_USER
+
+
 def _as_user():
-    text = (QRS_AS_USER or "").strip()
+    text = (as_user_setting() or "").strip()
     directory, _, user_id = text.replace("/", "\\").partition("\\")
     if not user_id:
         raise QrsError(
-            f"QRS_AS_USER must look like DIRECTORY\\user, got {QRS_AS_USER!r}."
+            f"QRS_AS_USER must look like DIRECTORY\\user, got "
+            f"{as_user_setting()!r}."
         )
-    return f"UserDirectory={directory}; UserId={user_id}"
+    return f"UserDirectory={directory};UserId={user_id}"
 
 
 def _certificates():
@@ -84,7 +94,11 @@ def _client():
     return httpx.Client(cert=cert, verify=verify, timeout=QRS_TIMEOUT)
 
 
-def _get(client, path, params=None):
+def as_header(directory_name, user_id):
+    return f"UserDirectory={directory_name};UserId={user_id}"
+
+
+def _get(client, path, params=None, as_user=None):
     import httpx
 
     key = _xrfkey()
@@ -95,7 +109,7 @@ def _get(client, path, params=None):
             params={**(params or {}), "xrfkey": key},
             headers={
                 "X-Qlik-Xrfkey": key,
-                "X-Qlik-User": _as_user(),
+                "X-Qlik-User": as_user or _as_user(),
                 "Accept": "application/json",
             },
         )
@@ -106,14 +120,11 @@ def _get(client, path, params=None):
         raise QrsError(
             f"The repository rejected the certificate (401). The client "
             f"certificate in {QLIK_CERT_DIR} has to be one the QMC exported, "
-            f"and QRS_AS_USER ({QRS_AS_USER!r}) has to be an account the "
-            f"repository trusts."
+            f"and QRS_AS_USER ({as_user_setting()!r}) has to be an account "
+            f"the repository trusts."
         )
     if response.status_code == 403:
-        raise QrsError(
-            f"The repository refused the request (403). {QRS_AS_USER!r} does "
-            f"not have rights to read this."
-        )
+        raise QrsError(_explain_403(client, path))
     if response.status_code >= 400:
         raise QrsError(
             f"The repository returned {response.status_code} for {path}: "
@@ -126,6 +137,48 @@ def _get(client, path, params=None):
         raise QrsError(
             f"The repository returned something that is not JSON for {path}."
         ) from e
+
+
+def _explain_403(client, path):
+    lines = [
+        f"The repository accepted the certificate but refused the request "
+        f"(403): {as_user_setting()} is not allowed to read {path}.",
+    ]
+
+    reachable = None
+    if path != "/about":
+        try:
+            _get(client, "/about")
+            reachable = True
+        except QrsError:
+            reachable = False
+
+    if reachable is True:
+        lines += [
+            "  /about worked as the same account, so the certificate and the "
+            "identity header are both fine.",
+            f"  This account simply lacks rights to read {path}. In the QMC, "
+            f"give it RootAdmin, or use an account that already has it.",
+        ]
+    elif reachable is False:
+        lines += [
+            "  /about was refused too, so this is not about one endpoint - "
+            "the identity is not being accepted at all.",
+            "  Check that the certificate in QLIK_CERT_DIR was exported from "
+            "THIS Qlik server (QMC > Certificates > Export certificates, "
+            "platform independent), and that port 4242 is reachable.",
+        ]
+
+    lines += [
+        "  Accounts worth trying, in order:",
+        "    QRS_AS_USER=INTERNAL\\sa_api          (the usual one for "
+        "certificate calls)",
+        "    QRS_AS_USER=INTERNAL\\sa_repository",
+        "    QRS_AS_USER=<YOURDIRECTORY>\\<an account with RootAdmin>",
+        "  Try one without editing .env:  manage_users.py sync --dry-run "
+        "--as INTERNAL\\sa_api",
+    ]
+    return "\n".join(lines)
 
 
 def about():
@@ -153,6 +206,33 @@ def fetch_users():
                 raise QrsError("The repository returned an unreasonable number "
                                "of users; stopping.")
     return people
+
+
+def hub_apps(directory_name, user_id):
+    header = as_header(directory_name, user_id)
+    with _client() as client:
+        rows = _get(client, "/app/hublist/full", as_user=header)
+
+    if not isinstance(rows, list):
+        raise QrsError("The repository did not return a list of apps.")
+
+    apps = []
+    for row in rows:
+        stream = row.get("stream") or {}
+        apps.append({
+            "id": row.get("id"),
+            "name": (row.get("name") or "").strip(),
+            "stream": (stream.get("name") or "").strip(),
+            "published": bool(row.get("published")),
+            "owner": "\\".join(
+                part for part in (
+                    (row.get("owner") or {}).get("userDirectory"),
+                    (row.get("owner") or {}).get("userId"),
+                ) if part
+            ),
+            "privileges": sorted(row.get("privileges") or []),
+        })
+    return sorted(apps, key=lambda a: a["name"].lower())
 
 
 def _properties(row):
@@ -196,17 +276,6 @@ def skipped(row):
     return None
 
 
-def as_entry(row):
-    user_id = (row.get("userId") or "").strip()
-    return {
-        "username": user_id,
-        "display_name": (row.get("name") or "").strip() or user_id,
-        "mail": "",
-        "groups": list(row.get("roles") or []),
-        "dn": f"{row.get('userDirectory')}\\{user_id}",
-    }
-
-
 def identity(row):
     return ((row.get("userDirectory") or "").strip(),
             (row.get("userId") or "").strip())
@@ -217,7 +286,8 @@ def summary():
         return "QRS sync is off (QRS_ENABLED=false)"
     marker = (f"custom property {QRS_ADMIN_PROPERTY!r}" if QRS_ADMIN_PROPERTY
               else f"role {QRS_ADMIN_ROLE!r}")
-    return f"{where()} as {QRS_AS_USER}, administrators marked by {marker}"
+    return (f"{where()} as {as_user_setting()}, administrators marked by "
+            f"{marker}")
 
 
 def _generated_password():

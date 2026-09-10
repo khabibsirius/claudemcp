@@ -418,8 +418,10 @@ async function loadUsers() {
 
   $("usersHint").textContent = PER_USER_ENGINES
     ? "Each user connects to Qlik Sense as themselves, so the QMC's app "
-      + "permissions decide what they can see. A user with no Qlik identity "
-      + "falls back to the server's own."
+      + "permissions decide what they can see. An account with no Qlik "
+      + "identity is refused at Qlik rather than borrowing the service "
+      + "account \u2014 fill in both fields for everyone, including "
+      + "administrators."
     : "This server is talking to Qlik Sense Desktop, which has one session and "
       + "no identities — everyone shares that connection. Conversations, "
       + "history and permissions here are still per user, and the Qlik identity "

@@ -279,6 +279,30 @@ class Session:
             self.open_app(APP_NAME)
         return self.state["engine"]
 
+    def open_default(self):
+        try:
+            return self.open_app(APP_NAME)
+        except QlikIdentityMissing:
+            raise
+        except QlikEngineError as refused:
+            try:
+                theirs = self.list_apps()
+            except QlikEngineError:
+                raise refused from None
+
+            for name in theirs:
+                if name == APP_NAME:
+                    continue
+                try:
+                    engine_ = self.open_app(name)
+                except QlikEngineError:
+                    continue
+                log.info("%s cannot open %r; started them in %r instead",
+                         self.key, APP_NAME, name)
+                return engine_
+
+            raise refused
+
     def app_name(self):
         return self.state["app_name"]
 

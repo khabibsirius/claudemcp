@@ -60,6 +60,23 @@ def _may_run(sess):
     return may
 
 
+def _report_readiness():
+    import preflight
+
+    try:
+        items = preflight.findings()
+    except Exception as e:
+        log.debug("Could not run the preflight checks: %s", e)
+        return
+
+    if not items:
+        return
+
+    print()
+    print(preflight.render(items))
+    print()
+
+
 def widen_the_threadpool():
     limiter = anyio.to_thread.current_default_thread_limiter()
     before = limiter.total_tokens
@@ -92,7 +109,7 @@ async def _gate(request: Request, call_next):
 def _engine(sess):
     try:
         if sess.app_name() is None:
-            sess.open_app(APP_NAME)
+            sess.open_default()
         return sess.engine()
     except session.QlikIdentityMissing as e:
         raise HTTPException(403, str(e)) from e
@@ -1037,6 +1054,8 @@ def main(argv=None):
             print(f"  password: {generated}")
             print("  This is shown once. Change it after signing in.")
             print("  ---------------------------------------------------")
+
+    _report_readiness()
 
     engine_ = None
     try:

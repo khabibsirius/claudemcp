@@ -871,6 +871,7 @@ async function api(path, options) {
     let detail = response.statusText;
     try { detail = (await response.json()).detail || detail; } catch (_) {}
     const error = new Error(detail);
+    error.status = response.status;
 
     if (response.headers.get("X-Qlik-Reconnect") === "1") {
       error.reconnect = true;
@@ -1496,8 +1497,30 @@ $("btnStopActing").onclick = async () => {
   }
 };
 
+function reportLoadFailure(e) {
+  if (e.status === 403) {
+    setStatus(e.message, "bad");
+    return;
+  }
+  setStatus(t("couldNotReachQlik", {error: e.message}), "bad");
+}
+
 async function load() {
-  const state = await api("/api/state");
+  let options = null;
+  try {
+    options = await api("/api/options");
+  } catch (e) {
+    console.warn("Could not list apps and models:", e);
+  }
+
+  let state;
+  try {
+    state = await api("/api/state");
+  } catch (e) {
+    if (options) renderOptions(options);
+    throw e;
+  }
+
   renderAccount(state.user);
   $("meta").textContent = state.mode;
   $("allowReload").checked = state.allow_reload !== false;
@@ -1517,10 +1540,11 @@ async function load() {
 
   if (!turn) repaint(state.transcript);
   refreshHistory();
-  try {
-    renderOptions(await api("/api/options"));
-  } catch (e) {
-    $("meta").textContent = `${state.mode} · ${state.model}`;
+
+  if (options) {
+    renderOptions(options);
+  } else {
+    $("meta").textContent = `${state.mode} \u00b7 ${state.model}`;
   }
 }
 
@@ -1822,7 +1846,7 @@ $("langSel").onchange = event => {
   applyLanguage();
   pinLanguage();
 
-  load().catch(e => setStatus(t("couldNotReachQlik", {error: e.message}), "bad"));
+  load().catch(reportLoadFailure);
 };
 
 function pinLanguage() {
@@ -1835,7 +1859,7 @@ function pinLanguage() {
 
 applyLanguage();
 pinLanguage();
-load().catch(e => setStatus(t("couldNotReachQlik", {error: e.message}), "bad"));
+load().catch(reportLoadFailure);
 </script>
 </body>
 </html>

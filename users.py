@@ -213,6 +213,29 @@ def check_password(password, stored):
     return hmac.compare_digest(computed.hex(), digest)
 
 
+def needs_qlik_identity():
+    from config import ALLOW_SHARED_QLIK_IDENTITY, AUTH_ENABLED, ENTERPRISE
+    from config import QLIK_MODE
+
+    return (QLIK_MODE == ENTERPRISE and AUTH_ENABLED
+            and not ALLOW_SHARED_QLIK_IDENTITY)
+
+
+def check_qlik_identity(qlik_directory, qlik_user_id):
+    if not needs_qlik_identity():
+        return
+
+    if not (str(qlik_directory or "").strip()
+            and str(qlik_user_id or "").strip()):
+        raise UserError(
+            "On Qlik Sense Enterprise every account needs its own Qlik "
+            "identity - the user directory and user id it connects as. "
+            "Without them the account is refused at Qlik, because it would "
+            "otherwise run as the server's service account and see every app "
+            "that account can see. Find them in the QMC under Users."
+        )
+
+
 def unusable_password():
     return "pbkdf2_sha256$1$" + secrets.token_hex(16) + "$" + secrets.token_hex(32)
 
@@ -264,6 +287,9 @@ def create(username, password, role=USER, display_name="",
     name = clean_username(username)
     if auth_source not in SOURCES:
         raise UserError("Auth source must be one of " + ", ".join(SOURCES) + ".")
+
+    if auth_source == LOCAL:
+        check_qlik_identity(qlik_directory, qlik_user_id)
 
     if auth_source == DIRECTORY:
         stored = unusable_password()
@@ -713,8 +739,24 @@ def bootstrap():
     if count() > 0:
         return None
 
+    from config import QLIK_USER_DIRECTORY, QLIK_USER_ID
+
     password = ADMIN_PASSWORD or secrets.token_urlsafe(12)
-    create(ADMIN_USERNAME, password, role=ADMIN, display_name="Administrator")
+
+    qlik_directory, qlik_user_id = "", ""
+    if needs_qlik_identity():
+        qlik_directory = (QLIK_USER_DIRECTORY or "").strip()
+        qlik_user_id = (QLIK_USER_ID or "").strip()
+        if not (qlik_directory and qlik_user_id):
+            raise UserError(
+                "The first administrator needs a Qlik identity and there is "
+                "nothing to take it from. Set QLIK_USER_DIRECTORY and "
+                "QLIK_USER_ID in .env - they are the account this server "
+                "connects to Qlik Sense as."
+            )
+
+    create(ADMIN_USERNAME, password, role=ADMIN, display_name="Administrator",
+           qlik_directory=qlik_directory, qlik_user_id=qlik_user_id)
     audit("bootstrap", detail={"username": ADMIN_USERNAME})
     log.info("Created the first administrator %r", ADMIN_USERNAME)
     return None if ADMIN_PASSWORD else password

@@ -1,5 +1,7 @@
 import json
+import os
 import sys
+import tempfile
 import types
 from collections import deque
 from pathlib import Path
@@ -8,6 +10,50 @@ import pytest
 import websocket
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+_SANDBOX = Path(tempfile.mkdtemp(prefix="qlikai-tests-"))
+
+BASELINE = {
+    "QLIK_MODE": "desktop",
+    "QLIK_HOST": "localhost",
+    "QLIK_PORT": "4848",
+    "QLIK_CERT_DIR": "",
+    "QLIK_USER_DIRECTORY": "",
+    "QLIK_USER_ID": "",
+    "APP_NAME": "data",
+    "AUTH_ENABLED": "true",
+    "ALLOW_SHARED_QLIK_IDENTITY": "false",
+    "PASSWORD_MIN": "8",
+    "ADMIN_USERNAME": "admin",
+    "ADMIN_PASSWORD": "",
+    "LDAP_ENABLED": "false",
+    "LDAP_SERVER": "",
+    "LDAP_USE_SSL": "true",
+    "LDAP_START_TLS": "false",
+    "LDAP_PORT": "636",
+    "LDAP_UPN_SUFFIX": "",
+    "LDAP_WINDOWS_DOMAIN": "",
+    "LDAP_BASE_DN": "",
+    "LDAP_USER_ATTRIBUTE": "",
+    "LDAP_BIND_USER": "",
+    "LDAP_BIND_PASSWORD": "",
+    "LDAP_ADMIN_GROUP": "",
+    "LDAP_QLIK_DIRECTORY": "",
+    "QRS_ENABLED": "false",
+    "OPENAI_BASE_URL": "http://127.0.0.1:9/v1",
+    "OPENAI_API_KEY": "",
+    "OPENAI_MODEL": "test-model",
+    "CHAT_MODEL": "",
+    "USERS_DB": str(_SANDBOX / "users.db"),
+    "HISTORY_DIR": str(_SANDBOX / "history"),
+    "GLOSSARY_FILE": str(_SANDBOX / "glossary.md"),
+    "LOG_FILE": "",
+    "AUDIT_RETENTION_DAYS": "0",
+    "HISTORY_RETENTION_DAYS": "0",
+}
+
+for _name, _value in BASELINE.items():
+    os.environ.setdefault(_name, _value)
 
 
 def _neutral_overrides():

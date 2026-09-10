@@ -106,7 +106,10 @@ class TestCreating:
 
     def test_it_warns_when_there_is_no_qlik_identity(self, boss, capsys):
         run("create", "jsmith", "--password", "jsmith-password-1")
-        assert "share the server's connection" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "no Qlik identity set" in out
+        assert "refused the moment it touches Qlik" in out
+        assert "manage_users.py qlik jsmith" in out
 
     def test_a_bad_username_is_refused_with_a_reason(self, boss, capsys):
         assert run("create", "not a username", "--password", "a-good-password") == 1

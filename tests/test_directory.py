@@ -197,10 +197,14 @@ class TestConfigurationRefusesASilentlyBrokenSetup:
         import importlib
         import os
 
+        from conftest import BASELINE
+
         for key in ("LDAP_ENABLED", "LDAP_SERVER", "LDAP_BASE_DN",
                     "LDAP_UPN_SUFFIX", "LDAP_WINDOWS_DOMAIN",
                     "LDAP_QLIK_DIRECTORY"):
             os.environ.pop(key, None)
+            if key in BASELINE:
+                os.environ[key] = BASELINE[key]
 
         import config
 

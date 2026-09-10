@@ -67,8 +67,11 @@ def cmd_create(args):
                                         "role": user["role"], "by": "command line"})
     print(f"Created {user['username']} ({user['role']}).")
     if not (user["qlik_directory"] and user["qlik_user_id"]):
-        print("  note: no Qlik identity set, so on Enterprise this account "
-              "will share the server's connection rather than having its own.")
+        print(f"  note: no Qlik identity set. On Enterprise this account can "
+              f"sign in but is refused the moment it touches Qlik, because it "
+              f"would otherwise run as the service account. Fix it with:\n"
+              f"    manage_users.py qlik {user['username']} "
+              f"<DIRECTORY> <qlik user id>")
     return 0
 
 
@@ -163,6 +166,158 @@ def cmd_qlik(args):
     return 0
 
 
+def cmd_apps(args):
+    import qrs
+
+    if not qrs.enabled() and not args.force:
+        return _fail("QRS_ENABLED is false. Set it in .env, or pass --force.")
+
+    if args.directory and args.user_id:
+        directory_name, user_id, label = args.directory, args.user_id, "given"
+    else:
+        user = _find(args.username)
+        if user is None:
+            return 1
+        directory_name = user["qlik_directory"]
+        user_id = user["qlik_user_id"]
+        label = f"account {user['username']!r}"
+        if not (directory_name and user_id):
+            return _fail(
+                f"{user['username']} has no Qlik identity, so there is nobody "
+                f"to ask about. Set one:\n"
+                f"    manage_users.py qlik {user['username']} "
+                f"<DIRECTORY> <qlik user id>"
+            )
+
+    print(f"Asking {qrs.where()} what {directory_name}\\{user_id} can open "
+          f"({label})")
+    try:
+        apps = qrs.hub_apps(directory_name, user_id)
+    except qrs.QrsError as e:
+        return _fail(str(e))
+
+    if not apps:
+        print("\n  Nothing. Qlik shows this person no apps at all - check the "
+              "security rules in the QMC.")
+        return 0
+
+    print(f"\n{len(apps)} app(s):")
+    print(f"  {'app':<34} {'stream':<18} {'owner':<22} privileges")
+    for app in apps:
+        print(f"  {app['name'][:33]:<34} "
+              f"{(app['stream'] or '-')[:17]:<18} "
+              f"{(app['owner'] or '-')[:21]:<22} "
+              f"{', '.join(app['privileges']) or '(none)'}")
+
+    writable = [a["name"] for a in apps if "update" in a["privileges"]]
+    print(f"\n  can change {len(writable)} of them"
+          + (f": {', '.join(writable[:6])}" if writable else ""))
+    print("  'read' alone means they can open it but the assistant cannot "
+          "save changes there.")
+    return 0
+
+
+def cmd_check(args):
+    import config
+    import session
+
+    print("What this copy of the code and this .env actually do")
+    print("-" * 68)
+
+    guard_present = hasattr(session.Session, "borrows_service_account")
+    print(f"  code has the identity guard   {'yes' if guard_present else 'NO'}")
+    if not guard_present:
+        print("      This copy predates the fix. A user with no Qlik identity")
+        print("      will silently run as the service account.")
+
+    print(f"  QLIK_MODE                     {config.QLIK_MODE}")
+    if config.AUTH_ENABLED and not session.per_user_engines():
+        print("      *** QLIK_MODE is not 'enterprise', so every signed-in "
+              "person shares")
+        print("      *** ONE connection as "
+              f"{config.QLIK_USER_DIRECTORY or '(unset)'}\\"
+              f"{config.QLIK_USER_ID or '(unset)'} and sees every app that "
+              "account can")
+        print("      *** see. Sign-in separates conversations but NOT Qlik "
+              "data.")
+        print("      *** Set QLIK_MODE=enterprise in .env and restart.")
+    print(f"  AUTH_ENABLED                  {config.AUTH_ENABLED}")
+    print(f"  ALLOW_SHARED_QLIK_IDENTITY    "
+          f"{getattr(config, 'ALLOW_SHARED_QLIK_IDENTITY', 'not in this build')}")
+    print(f"  per-user Qlik connections     {session.per_user_engines()}")
+    print(f"  service account               "
+          f"{config.QLIK_USER_DIRECTORY}\\{config.QLIK_USER_ID}")
+    print(f"  accounts database             {config.USERS_DB}")
+
+    import qrs
+
+    print(f"  QRS_ENABLED                   "
+          f"{getattr(config, 'QRS_ENABLED', 'not in this build')}")
+    if getattr(config, "QRS_ENABLED", False):
+        print(f"  reads accounts from           {qrs.where()}")
+        print(f"  as                            {qrs.as_user_setting()}")
+    else:
+        print("      'Sync from Qlik' stays disabled until this is true, and")
+        print("      the server has to be restarted after changing .env.")
+
+    import preflight
+
+    items = preflight.findings()
+    if items:
+        print()
+        print(preflight.render(items, indent=""))
+
+    enforcing = (guard_present and config.AUTH_ENABLED
+                 and session.per_user_engines()
+                 and not getattr(config, "ALLOW_SHARED_QLIK_IDENTITY", False))
+
+    print()
+    print("Accounts")
+    print("-" * 68)
+    rows = list(users.listing())
+    if not rows:
+        print("  (none yet)")
+    blank = []
+    for row in rows:
+        has = bool(row["qlik_directory"] and row["qlik_user_id"])
+        identity = (f"{row['qlik_directory']}\\{row['qlik_user_id']}" if has
+                    else "(blank)")
+        if has:
+            verdict = "own Qlik connection"
+        elif enforcing:
+            verdict = "REFUSED at Qlik until an identity is set"
+        else:
+            verdict = "WOULD RUN AS THE SERVICE ACCOUNT"
+            blank.append(row["username"])
+        print(f"  {row['username']:<16} {row['role']:<6} {identity:<24} {verdict}")
+
+    print()
+    if not config.AUTH_ENABLED:
+        print("  AUTH_ENABLED is false: everyone shares one session, one set of")
+        print("  conversations and one Qlik connection. Nothing below separates")
+        print("  people until you turn it on.")
+        return 1
+
+    if blank:
+        print(f"  {len(blank)} account(s) would see everything the service account")
+        print(f"  can see: {', '.join(blank)}")
+        print("  Give each one an identity:")
+        for name in blank:
+            print(f"    manage_users.py qlik {name} <DIRECTORY> <qlik user id>")
+        return 1
+
+    missing = [row["username"] for row in rows
+               if not (row["qlik_directory"] and row["qlik_user_id"])]
+    if missing:
+        print(f"  {len(missing)} account(s) have no Qlik identity and are refused")
+        print(f"  at Qlik: {', '.join(missing)}")
+        return 1
+
+    print("  Every account has its own Qlik identity. Qlik decides what each")
+    print("  person can open.")
+    return 0
+
+
 def cmd_sync(args):
     import qrs
 
@@ -170,11 +325,35 @@ def cmd_sync(args):
         return _fail("QRS_ENABLED is false. Set it in .env, or pass --force "
                      "to sync anyway.")
 
-    print(f"Reading {qrs.where()} as {qrs.QRS_AS_USER}")
-    try:
-        rows = qrs.fetch_users()
-    except qrs.QrsError as e:
-        return _fail(str(e))
+    if args.as_user:
+        qrs.AS_USER_OVERRIDE = args.as_user
+
+    attempts = ([qrs.as_user_setting()] if args.as_user
+                else list(dict.fromkeys([qrs.QRS_AS_USER, *qrs.CANDIDATES])))
+
+    rows = None
+    refusals = []
+    for position, candidate in enumerate(attempts):
+        qrs.AS_USER_OVERRIDE = candidate
+        print(f"Reading {qrs.where()} as {candidate}")
+        try:
+            rows = qrs.fetch_users()
+            break
+        except qrs.QrsError as e:
+            refusals.append((candidate, str(e)))
+            last = position == len(attempts) - 1
+            if "403" not in str(e) or last:
+                break
+            print("   refused; trying another account")
+
+    if rows is None:
+        for candidate, message in refusals:
+            print(f"\nAs {candidate}:\n{message}", file=sys.stderr)
+        return 1
+
+    if qrs.as_user_setting() != qrs.QRS_AS_USER:
+        print(f"   worked as {qrs.as_user_setting()} - put this in .env:")
+        print(f"     QRS_AS_USER={qrs.as_user_setting()}")
 
     print(f"{len(rows)} account(s) in the Qlik repository")
 
@@ -386,6 +565,22 @@ def build_parser():
     qlik.add_argument("user_id", help="Qlik user id")
     qlik.set_defaults(run=cmd_qlik)
 
+    sub.add_parser(
+        "check",
+        help="report whether this deployment separates users properly"
+    ).set_defaults(run=cmd_check)
+
+    reach = sub.add_parser(
+        "apps", help="ask Qlik which apps one person can actually open")
+    reach.add_argument("username", nargs="?", default="",
+                       help="an account here; its Qlik identity is used")
+    reach.add_argument("--directory", default="",
+                       help="ask about a Qlik identity directly instead")
+    reach.add_argument("--user-id", dest="user_id", default="")
+    reach.add_argument("--force", action="store_true",
+                       help="run even when QRS_ENABLED is false")
+    reach.set_defaults(run=cmd_apps)
+
     pull = sub.add_parser(
         "sync", help="create and refresh accounts from the Qlik repository")
     pull.add_argument("--dry-run", action="store_true",
@@ -394,6 +589,9 @@ def build_parser():
                       help="also list who was skipped and why")
     pull.add_argument("--force", action="store_true",
                       help="run even when QRS_ENABLED is false")
+    pull.add_argument("--as", dest="as_user", metavar="DIRECTORY\\user",
+                      help="read the repository as this account instead of "
+                           "QRS_AS_USER, e.g. INTERNAL\\sa_api")
     pull.set_defaults(run=cmd_sync)
 
     token = sub.add_parser("token", help="issue or revoke an MCP token")
