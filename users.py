@@ -236,6 +236,46 @@ def check_qlik_identity(qlik_directory, qlik_user_id):
         )
 
 
+def identity_owner(qlik_directory, qlik_user_id, besides=None):
+    """Which other account already connects as this Qlik user, if any.
+
+    Qlik treats the directory and user id case-insensitively, so 'QS\\bekzat'
+    and 'qs\\Bekzat' are one person and must collide here too.
+    """
+    directory = str(qlik_directory or "").strip()
+    user_id = str(qlik_user_id or "").strip()
+    if not (directory and user_id):
+        return None
+
+    row = connect().execute(
+        "SELECT * FROM users "
+        "WHERE LOWER(qlik_directory) = ? AND LOWER(qlik_user_id) = ? "
+        "AND id IS NOT ? LIMIT 1",
+        (directory.lower(), user_id.lower(), besides),
+    ).fetchone()
+    return _row(row)
+
+
+def check_identity_free(qlik_directory, qlik_user_id, besides=None):
+    """Refuse to point two accounts at one Qlik user.
+
+    Two accounts sharing an identity are one Qlik user with one hub: each
+    person sees the other's apps. Nothing in Qlik stops this - it has to be
+    stopped here.
+    """
+    other = identity_owner(qlik_directory, qlik_user_id, besides=besides)
+    if other is None:
+        return
+
+    raise UserError(
+        f"{other['username']!r} already connects to Qlik as "
+        f"{str(qlik_directory).strip()}\\{str(qlik_user_id).strip()}. Two "
+        f"accounts on one Qlik identity are one Qlik user, so both people "
+        f"would see the same apps. Give this account the Qlik user that "
+        f"belongs to the person using it."
+    )
+
+
 def unusable_password():
     return "pbkdf2_sha256$1$" + secrets.token_hex(16) + "$" + secrets.token_hex(32)
 
@@ -288,8 +328,10 @@ def create(username, password, role=USER, display_name="",
     if auth_source not in SOURCES:
         raise UserError("Auth source must be one of " + ", ".join(SOURCES) + ".")
 
-    if auth_source == LOCAL:
-        check_qlik_identity(qlik_directory, qlik_user_id)
+    # Every source, not just LOCAL: a directory or QRS account with a blank
+    # or borrowed identity is the same leak as a hand-made one.
+    check_qlik_identity(qlik_directory, qlik_user_id)
+    check_identity_free(qlik_directory, qlik_user_id)
 
     if auth_source == DIRECTORY:
         stored = unusable_password()
@@ -373,6 +415,15 @@ def update(user_id, **fields):
             "This is the only active administrator. Promote someone else "
             "first, or there would be nobody left who can manage users."
         )
+
+    # An edit can blank or borrow an identity just as easily as a create can,
+    # and the admin page edits exactly these two fields. Check the identity
+    # this account would END UP with, not the fields that happened to be sent.
+    if {"qlik_directory", "qlik_user_id"} & set(fields):
+        directory = fields.get("qlik_directory", user["qlik_directory"])
+        qlik_user = fields.get("qlik_user_id", user["qlik_user_id"])
+        check_qlik_identity(directory, qlik_user)
+        check_identity_free(directory, qlik_user, besides=user_id)
 
     sets, values = [], []
     for key, value in fields.items():

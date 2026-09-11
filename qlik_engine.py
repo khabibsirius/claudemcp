@@ -351,6 +351,39 @@ class QlikEngine:
 
             return response
 
+    def whoami(self):
+        """Ask the engine which user it thinks this connection is.
+
+        The only way to tell a working impersonation header from one the
+        server ignored: the answer comes from Qlik, not from our own config.
+        """
+        response = self.send("GetAuthenticatedUser")
+        return str(response["result"].get("qReturn") or "").strip()
+
+    def identity_matches(self):
+        """(ok, reported) - does the engine agree with the identity we asked for?
+
+        ok is None when the answer cannot be parsed, so callers can say
+        "could not tell" instead of reporting a false pass.
+        """
+        reported = self.whoami()
+        if self.mode != ENTERPRISE:
+            return None, reported
+
+        found = dict(
+            (key.strip().lower(), value.strip())
+            for key, _, value in (
+                part.partition("=") for part in reported.split(";")
+            )
+            if value.strip()
+        )
+        directory, user_id = found.get("userdirectory"), found.get("userid")
+        if not (directory and user_id):
+            return None, reported
+
+        return (directory.lower() == (self.user_directory or "").strip().lower()
+                and user_id.lower() == (self.user_id or "").strip().lower()), reported
+
     def list_apps(self):
         response = self.send("GetDocList")
         return [

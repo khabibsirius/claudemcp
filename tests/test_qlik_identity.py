@@ -243,3 +243,161 @@ class TestWhereSomebodyLandsOnTheirFirstRequest:
 
         with pytest.raises(session.QlikIdentityMissing):
             sess.open_default()
+
+
+class TestTwoAccountsCannotShareOneQlikIdentity:
+    """Two accounts on one Qlik identity are one Qlik user with one hub,
+    so each person sees the other's apps. Qlik does not prevent this."""
+
+    def enterprise(self, monkeypatch):
+        import config
+        monkeypatch.setattr(config, "QLIK_MODE", config.ENTERPRISE)
+        monkeypatch.setattr(config, "AUTH_ENABLED", True)
+        monkeypatch.setattr(config, "ALLOW_SHARED_QLIK_IDENTITY", False)
+        monkeypatch.setattr(config, "QLIK_USER_DIRECTORY", "QS")
+        monkeypatch.setattr(config, "QLIK_USER_ID", "qp20")
+
+    def test_a_second_account_cannot_claim_a_taken_identity(
+            self, isolated_accounts, monkeypatch):
+        self.enterprise(monkeypatch)
+        users.create("bekzat", "a-good-password",
+                     qlik_directory="QS", qlik_user_id="bekzat")
+
+        with pytest.raises(users.UserError, match="already connects to Qlik"):
+            users.create("aigerim", "a-good-password",
+                         qlik_directory="QS", qlik_user_id="bekzat")
+
+    def test_the_message_names_the_account_already_holding_it(
+            self, isolated_accounts, monkeypatch):
+        self.enterprise(monkeypatch)
+        users.create("bekzat", "a-good-password",
+                     qlik_directory="QS", qlik_user_id="bekzat")
+
+        with pytest.raises(users.UserError) as caught:
+            users.create("aigerim", "a-good-password",
+                         qlik_directory="QS", qlik_user_id="bekzat")
+
+        assert "bekzat" in str(caught.value)
+
+    def test_case_and_spacing_do_not_get_round_it(self, isolated_accounts,
+                                                  monkeypatch):
+        self.enterprise(monkeypatch)
+        users.create("bekzat", "a-good-password",
+                     qlik_directory="QS", qlik_user_id="bekzat")
+
+        with pytest.raises(users.UserError, match="already connects to Qlik"):
+            users.create("aigerim", "a-good-password",
+                         qlik_directory=" qs ", qlik_user_id="BEKZAT")
+
+    def test_an_edit_cannot_move_an_account_onto_a_taken_identity(
+            self, isolated_accounts, monkeypatch):
+        self.enterprise(monkeypatch)
+        users.create("bekzat", "a-good-password",
+                     qlik_directory="QS", qlik_user_id="bekzat")
+        other = users.create("aigerim", "a-good-password",
+                             qlik_directory="QS", qlik_user_id="aigerim")
+
+        with pytest.raises(users.UserError, match="already connects to Qlik"):
+            users.update(other["id"], qlik_user_id="bekzat")
+
+    def test_saving_an_account_unchanged_is_not_a_collision_with_itself(
+            self, isolated_accounts, monkeypatch):
+        self.enterprise(monkeypatch)
+        person = users.create("bekzat", "a-good-password",
+                              qlik_directory="QS", qlik_user_id="bekzat")
+
+        kept = users.update(person["id"], qlik_directory="QS",
+                            qlik_user_id="bekzat", display_name="Bekzat")
+
+        assert kept["qlik_user_id"] == "bekzat"
+        assert kept["display_name"] == "Bekzat"
+
+
+class TestAnEditCannotBlankAnIdentity:
+    """create() refused a blank identity; update() has to refuse it too, or
+    the admin page can undo the guard on any existing account."""
+
+    def enterprise(self, monkeypatch):
+        import config
+        monkeypatch.setattr(config, "QLIK_MODE", config.ENTERPRISE)
+        monkeypatch.setattr(config, "AUTH_ENABLED", True)
+        monkeypatch.setattr(config, "ALLOW_SHARED_QLIK_IDENTITY", False)
+
+    def test_clearing_both_fields_is_refused(self, isolated_accounts,
+                                             monkeypatch):
+        self.enterprise(monkeypatch)
+        person = users.create("bekzat", "a-good-password",
+                              qlik_directory="QS", qlik_user_id="bekzat")
+
+        with pytest.raises(users.UserError, match="own Qlik identity"):
+            users.update(person["id"], qlik_directory="", qlik_user_id="")
+
+    def test_clearing_just_the_user_id_is_refused(self, isolated_accounts,
+                                                  monkeypatch):
+        self.enterprise(monkeypatch)
+        person = users.create("bekzat", "a-good-password",
+                              qlik_directory="QS", qlik_user_id="bekzat")
+
+        with pytest.raises(users.UserError, match="own Qlik identity"):
+            users.update(person["id"], qlik_user_id="")
+
+    def test_the_account_keeps_the_identity_it_had(self, isolated_accounts,
+                                                   monkeypatch):
+        self.enterprise(monkeypatch)
+        person = users.create("bekzat", "a-good-password",
+                              qlik_directory="QS", qlik_user_id="bekzat")
+
+        with pytest.raises(users.UserError):
+            users.update(person["id"], qlik_user_id="")
+
+        assert users.get(person["id"])["qlik_user_id"] == "bekzat"
+
+    def test_edits_that_do_not_touch_the_identity_still_work(
+            self, isolated_accounts, monkeypatch):
+        self.enterprise(monkeypatch)
+        person = users.create("bekzat", "a-good-password",
+                              qlik_directory="QS", qlik_user_id="bekzat")
+
+        renamed = users.update(person["id"], display_name="Bekzat T.")
+
+        assert renamed["display_name"] == "Bekzat T."
+        assert renamed["qlik_user_id"] == "bekzat"
+
+
+class TestADirectoryAccountIsHeldToTheSameRule:
+    """from_directory() and qrs.sync() create with auth_source=DIRECTORY.
+    A blank identity there is the same leak as a hand-made one."""
+
+    def enterprise(self, monkeypatch):
+        import config
+        monkeypatch.setattr(config, "QLIK_MODE", config.ENTERPRISE)
+        monkeypatch.setattr(config, "AUTH_ENABLED", True)
+        monkeypatch.setattr(config, "ALLOW_SHARED_QLIK_IDENTITY", False)
+
+    def test_a_blank_directory_account_is_refused(self, isolated_accounts,
+                                                  monkeypatch):
+        self.enterprise(monkeypatch)
+
+        with pytest.raises(users.UserError, match="own Qlik identity"):
+            users.create("aigerim", None, auth_source=users.DIRECTORY)
+
+    def test_a_directory_account_cannot_take_a_taken_identity(
+            self, isolated_accounts, monkeypatch):
+        self.enterprise(monkeypatch)
+        users.create("bekzat", "a-good-password",
+                     qlik_directory="QS", qlik_user_id="bekzat")
+
+        with pytest.raises(users.UserError, match="already connects to Qlik"):
+            users.create("aigerim", None, qlik_directory="QS",
+                         qlik_user_id="bekzat", auth_source=users.DIRECTORY)
+
+    def test_a_complete_directory_account_is_still_accepted(
+            self, isolated_accounts, monkeypatch):
+        self.enterprise(monkeypatch)
+
+        made = users.create("aigerim", None, qlik_directory="QS",
+                            qlik_user_id="aigerim",
+                            auth_source=users.DIRECTORY)
+
+        assert made["qlik_user_id"] == "aigerim"
+        assert made["from_directory"] is True
